@@ -9,6 +9,7 @@
 #include <ostream>
 #include <string>
 #include <sstream>
+#include <type_traits>
 
 template <size_t bitCount>
 struct fixed_width_uint final
@@ -324,6 +325,18 @@ public:
         os.width(0);
         return os;
     }
+private:
+    static constexpr fixed_width_uint floor_sqrt_helper(fixed_width_uint v, fixed_width_uint bit, fixed_width_uint retval)
+    {
+        return bit == (fixed_width_uint)0 ? retval :
+            v >= bit + retval ? floor_sqrt_helper(v - (bit + retval), bit >> 2, (retval >> 1) | bit) :
+            floor_sqrt_helper(v, bit >> 2, retval >> 1);
+    }
+public:
+    friend constexpr fixed_width_uint floor_sqrt(fixed_width_uint v)
+    {
+        return floor_sqrt_helper(v, (fixed_width_uint)1 << ((bit_count - 1) & ~1), (fixed_width_uint)0);
+    }
 };
 
 template <size_t bitCount>
@@ -332,6 +345,8 @@ constexpr typename fixed_width_uint<bitCount>::half_width_type fixed_width_uint<
 template <size_t bitCount>
 struct fixed_width_int final
 {
+    template <size_t>
+    friend class fixed_width_int;
     static constexpr size_t bit_count = bitCount;
     static_assert(bit_count >= 8, "invalid bit count for fixed_width_int : must be at least 8");
     static_assert((bit_count & (bit_count - 1)) == 0, "invalid bit count for fixed_width_int : must be a power of 2");
@@ -358,7 +373,7 @@ public:
     }
     template <size_t N, typename = void, typename = typename std::enable_if<(N < bit_count)>::type>
     explicit constexpr fixed_width_int(fixed_width_int<N> value)
-        : value(value < (fixed_width_int<N>)0 ? -(fixed_width_uint<bit_count>)-value.value : (fixed_width_uint<bit_count>)value.value)
+        : value(value < (fixed_width_int<N>)0 ? -(fixed_width_uint<bit_count>)-value : (fixed_width_uint<bit_count>)value)
     {
     }
     template <size_t N>
@@ -590,6 +605,7 @@ private:
     }
     static constexpr long double log10_2 = 0.30102999566398119521373889472449302676818988L;
 public:
+    static constexpr bool is_specialized = true;
     static constexpr fixed_width_uint<N> min()
     {
         return fixed_width_uint<N>(0);
@@ -668,6 +684,7 @@ private:
     }
     static constexpr long double log10_2 = 0.30102999566398119521373889472449302676818988L;
 public:
+    static constexpr bool is_specialized = true;
     static constexpr fixed_width_int<N> min()
     {
         return fixed_width_int<N>(1) << (fixed_width_int<N>::bit_count - 1);
@@ -736,6 +753,10 @@ struct numeric_limits<const fixed_width_int<N>> : public numeric_limits<fixed_wi
 template <typename T, size_t bitCount, typename childClass, typename biggestIntType>
 class builtin_fixed_width_int
 {
+    template <size_t N>
+    friend class fixed_width_int;
+    template <size_t N>
+    friend class fixed_width_uint;
     T value;
 protected:
     struct make_flag_t
@@ -905,6 +926,18 @@ public:
     friend std::istream &operator <<(std::istream &is, builtin_fixed_width_int &v)
     {
         return is >> v.value;
+    }
+private:
+    static constexpr childClass floor_sqrt_helper(builtin_fixed_width_int v, builtin_fixed_width_int bit, childClass retval)
+    {
+        return bit.value == 0 ? retval :
+            v.value >= bit.value + retval.value ? floor_sqrt_helper(v - (bit + retval), bit >> 2, (retval >> 1) | bit) :
+            floor_sqrt_helper(v, bit >> 2, retval >> 1);
+    }
+public:
+    friend constexpr childClass floor_sqrt(builtin_fixed_width_int v)
+    {
+        return floor_sqrt_helper(v, make(1) << ((bit_count - 1) & ~1), make(0));
     }
 };
 

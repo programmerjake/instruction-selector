@@ -1,23 +1,31 @@
 #ifndef FLOAT_TYPES_H_INCLUDED
 #define FLOAT_TYPES_H_INCLUDED
 
-#include <cmath>
 #include "int_types.h"
+#include <cmath>
+#include <type_traits>
 
-#warning fix ieee754_soft_float
+template <size_t N, typename = void>
+struct ieee754_soft_float_std;
 
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize = 0>
 class ieee754_soft_float
 {
+    template <size_t MBC, size_t EBC, bool MMII, size_t PS>
+    friend class ieee754_soft_float;
 public:
     static constexpr size_t mantissa_bit_count = mantissaBitCount;
+    static_assert(mantissa_bit_count >= 2, "mantissa too small");
     static constexpr size_t exponent_bit_count = exponentBitCount;
+    static_assert(mantissa_bit_count >= 2, "exponent too small");
     static constexpr bool mantissa_msb_is_implicit = mantissaMsbIsImplicit;
     static constexpr size_t padding_size = paddingSize;
     static constexpr size_t bit_count = mantissa_bit_count + exponent_bit_count + 1 - (mantissa_msb_is_implicit ? 1 : 0);
-    typedef fixed_width_uint<bit_count + padding_size> word_type;
-    typedef fixed_width_uint<word_type::bit_count * 2> double_word_type;
-    typedef fixed_width_int<bit_count + padding_size> signed_type;
+    static constexpr size_t padded_bit_count = bit_count + padding_size;
+    typedef fixed_width_uint<padded_bit_count> word_type;
+    typedef fixed_width_int<padded_bit_count> signed_type;
+    typedef fixed_width_uint<padded_bit_count * 2> double_word_type;
+private:
     static constexpr size_t sign_bit_shift = bit_count - 1;
     static constexpr size_t exponent_shift = sign_bit_shift - exponent_bit_count;
     static constexpr size_t mantissa_shift = 0;
@@ -25,7 +33,7 @@ public:
     static constexpr word_type sign_bit_mask = (word_type)1 << sign_bit_shift;
     static constexpr word_type exponent_mask = (((word_type)1 << exponent_bit_count) - (word_type)1) << exponent_shift;
     static constexpr word_type exponent_bias = ((word_type)1 << (exponent_bit_count - 1)) - (word_type)1;
-    static constexpr word_type inf_nan_biased_exponent = exponent_mask;
+    static constexpr word_type inf_nan_biased_exponent = exponent_mask >> exponent_shift;
     static constexpr word_type denormal_zero_biased_exponent = (word_type)0;
     static constexpr signed_type inf_nan_unbiased_exponent = (signed_type)inf_nan_biased_exponent - (signed_type)exponent_bias;
     static constexpr signed_type denormal_zero_unbiased_exponent = (signed_type)denormal_zero_biased_exponent - (signed_type)exponent_bias;
@@ -36,7 +44,7 @@ public:
     static constexpr word_type nan_word = exponent_mask | (word_type)1;
     static constexpr word_type inf_word = exponent_mask;
     static constexpr word_type zero_word = (word_type)0;
-private:
+    static constexpr word_type one_word = ((word_type)1 << (mantissa_bit_count - 1)) | (exponent_bias << exponent_shift);
     word_type word;
     struct make_from_bits_flag_t
     {
@@ -80,7 +88,7 @@ private:
     {
         return mantissa == (signed_type)0 ? std::pair<signed_type, signed_type>((signed_type)mantissa, (signed_type)0) :
             (fixed_width_uint<N>)abs(mantissa) >> fractional_part_size == (fixed_width_uint<N>)0 ? normalize<fractional_part_size>(mantissa << 1, exponent - (signed_type)1) :
-            (fixed_width_uint<N>)abs(mantissa) >> fractional_part_size > (fixed_width_uint<N>)1 ? normalize<fractional_part_size>(mantissa >> 1, exponent + (signed_type)1) :
+            (fixed_width_uint<N>)abs(mantissa) >> fractional_part_size > (fixed_width_uint<N>)1 ? normalize<fractional_part_size>(mantissa >= (fixed_width_int<N>)0 ? mantissa >> 1 : -(-mantissa >> 1), exponent + (signed_type)1) :
             std::pair<signed_type, signed_type>((signed_type)mantissa, exponent);
     }
     template <size_t fractional_part_size = radix_point_shift, size_t N, typename = typename std::enable_if<(N < bit_count)>::type>
@@ -114,12 +122,12 @@ private:
     template <size_t N>
     static constexpr word_type int_to_float(fixed_width_int<N> value)
     {
-        return construct_float(value, (signed_type)0);
+        return construct_float(value, (signed_type)radix_point_shift);
     }
     template <size_t N>
     static constexpr word_type int_to_float(fixed_width_uint<N> value)
     {
-        return construct_float(false, value, (signed_type)0);
+        return construct_float(false, value, (signed_type)radix_point_shift);
     }
     constexpr word_type get_biased_exponent_value() const
     {
@@ -166,7 +174,27 @@ public:
     {
         return from_bits(inf_word);
     }
-    ieee754_soft_float(long double value)
+    static constexpr ieee754_soft_float make_denormal_min()
+    {
+        return from_bits((word_type)1);
+    }
+    static constexpr ieee754_soft_float make_min()
+    {
+        return from_bits((word_type)1 << exponent_shift);
+    }
+    static constexpr ieee754_soft_float make_max()
+    {
+        return from_bits(((exponent_mask - (word_type)1) & exponent_mask) | mantissa_mask);
+    }
+    static constexpr ieee754_soft_float make_epsilon()
+    {
+        return from_bits(construct_float((signed_type)1 << radix_point_shift, -(signed_type)mantissa_bit_count));
+    }
+    static constexpr ieee754_soft_float make_round_error()
+    {
+        return from_bits(construct_float((signed_type)1 << radix_point_shift, (signed_type)-1));
+    }
+    explicit ieee754_soft_float(long double value)
     {
         word_type sign_bit = (word_type)0;
         if(std::signbit(value))
@@ -187,7 +215,7 @@ public:
             {
                 word = sign_bit;
             }
-            else if(value < std::pow(2.0L, 1 - (int)(uintmax_t)exponent_bias)) // denormal
+            else if(exponent_bias < (word_type)0x1000000 && value < std::pow(2.0L, 1 - (int)(uintmax_t)exponent_bias)) // denormal
             {
                 int extra_shift = std::max<int>(0, (int)mantissa_bit_count - std::numeric_limits<long double>::digits);
                 value = std::ldexp(value, (int)(uintmax_t)exponent_bias - 1 + mantissa_bit_count - extra_shift);
@@ -200,9 +228,9 @@ public:
                 value = std::frexp(value, &exponent);
                 value = std::ldexp(value, (int)mantissa_bit_count - extra_shift);
                 exponent--;
-                if(exponent <= (int)(uintmax_t)exponent_bias)
+                if((signed_type)(intmax_t)exponent <= (signed_type)exponent_bias)
                 {
-                    word = (((word_type)std::floor(value) << extra_shift) & mantissa_mask) | sign_bit | (((word_type)exponent + exponent_bias) << exponent_shift);
+                    word = (((word_type)(uintmax_t)std::floor(value) << extra_shift) & mantissa_mask) | sign_bit | (((word_type)exponent + exponent_bias) << exponent_shift);
                 }
                 else
                 {
@@ -211,22 +239,83 @@ public:
             }
         }
     }
-    constexpr ieee754_soft_float(uintmax_t value)
+    explicit constexpr ieee754_soft_float(uintmax_t value)
         : word(int_to_float((word_type)value))
     {
     }
-    constexpr ieee754_soft_float(intmax_t value)
+    explicit constexpr ieee754_soft_float(intmax_t value)
         : word(int_to_float((signed_type)value))
     {
     }
     template <size_t N>
-    constexpr ieee754_soft_float(fixed_width_uint<N> value)
+    explicit constexpr ieee754_soft_float(fixed_width_uint<N> value)
         : word(int_to_float(value))
     {
     }
     template <size_t N>
-    constexpr ieee754_soft_float(fixed_width_int<N> value)
+    explicit constexpr ieee754_soft_float(fixed_width_int<N> value)
         : word(int_to_float(value))
+    {
+    }
+private:
+    template <size_t r_mantissa_bit_count, size_t N, typename = typename std::enable_if<(r_mantissa_bit_count > mantissa_bit_count)>::type>
+    static constexpr word_type convert_mantissa(fixed_width_uint<N> v)
+    {
+        return (word_type)(v >> (r_mantissa_bit_count - mantissa_bit_count));
+    }
+    template <size_t r_mantissa_bit_count, size_t N, typename = void, typename = typename std::enable_if<(r_mantissa_bit_count < mantissa_bit_count)>::type>
+    static constexpr word_type convert_mantissa(fixed_width_uint<N> v)
+    {
+        return (word_type)v << (mantissa_bit_count - r_mantissa_bit_count);
+    }
+    template <size_t r_mantissa_bit_count, size_t N, typename = void, typename = void, typename = typename std::enable_if<(r_mantissa_bit_count == mantissa_bit_count)>::type>
+    static constexpr word_type convert_mantissa(fixed_width_uint<N> v)
+    {
+        return (word_type)v;
+    }
+    static constexpr word_type convert_nan_mantissa_helper(word_type v)
+    {
+        return v == (word_type)0 ? (word_type)1 : v;
+    }
+    template <size_t r_mantissa_bit_count, size_t N>
+    static constexpr word_type convert_nan_mantissa(fixed_width_uint<N> v)
+    {
+        return convert_nan_mantissa_helper(convert_mantissa<r_mantissa_bit_count>(v));
+    }
+    template <size_t N, typename = typename std::enable_if<(N > signed_type::bit_count)>::type>
+    static constexpr bool exponent_too_big(fixed_width_int<N> v)
+    {
+        return v >= (fixed_width_int<N>)1 << exponent_bit_count;
+    }
+    template <size_t N, typename = void, typename = typename std::enable_if<(N <= signed_type::bit_count)>::type>
+    static constexpr bool exponent_too_big(fixed_width_int<N> v)
+    {
+        return (signed_type)v >= (signed_type)1 << exponent_bit_count;
+    }
+    template <size_t N, typename = typename std::enable_if<(N > signed_type::bit_count)>::type>
+    static constexpr bool exponent_too_small(fixed_width_int<N> v)
+    {
+        return v < (fixed_width_int<N>)-1 << exponent_bit_count;
+    }
+    template <size_t N, typename = void, typename = typename std::enable_if<(N <= signed_type::bit_count)>::type>
+    static constexpr bool exponent_too_small(fixed_width_int<N> v)
+    {
+        return (signed_type)v < (signed_type)-1 << exponent_bit_count;
+    }
+    template <typename r_float_type>
+    static constexpr word_type convert_float_no_sign(r_float_type v)
+    {
+        return v.isnan() ? exponent_mask | (convert_nan_mantissa<r_float_type::mantissa_bit_count>(v.get_unsigned_mantissa_value()) & mantissa_mask) :
+            v.isinf() ? inf_word :
+            v.iszero() || exponent_too_small(v.get_unbiased_exponent_value()) ? zero_word :
+            exponent_too_big(v.get_unbiased_exponent_value()) ? inf_word :
+            v.isdenormal() ? construct_float(false, v.get_unsigned_mantissa_value(), (signed_type)r_float_type::denormal_actual_exponent + (signed_type)((intmax_t)radix_point_shift - (intmax_t)r_float_type::radix_point_shift)) :
+            construct_float(false, v.get_unsigned_mantissa_value(), (signed_type)v.get_unbiased_exponent_value() + (signed_type)((intmax_t)radix_point_shift - (intmax_t)r_float_type::radix_point_shift));
+    }
+public:
+    template <size_t MBC, size_t EBC, bool MMII, size_t PS>
+    explicit constexpr ieee754_soft_float(ieee754_soft_float<MBC, EBC, MMII, PS> value)
+        : word(value.signbit() ? sign_bit_mask | convert_float_no_sign(value) : convert_float_no_sign(value))
     {
     }
     constexpr bool isfinite() const
@@ -269,15 +358,24 @@ private:
         return a < b ? a : b;
     }
     template <size_t N>
-    static constexpr fixed_width_int<N> round_to_zero_rshift(fixed_width_int<N> v, size_t shift_count)
+    static constexpr fixed_width_int<N> round_to_zero_rshift(fixed_width_int<N> v, intmax_t shift_count)
     {
-        return shift_count >= fixed_width_int<N>::bit_count ? (fixed_width_int<N>)0 : v < (fixed_width_int<N>)0 ? -(-v >> shift_count) : v >> shift_count;
+        return shift_count >= fixed_width_int<N>::bit_count ? (fixed_width_int<N>)0 :
+            shift_count < 0 ? v << -shift_count :
+            v < (fixed_width_int<N>)0 ? -(-v >> shift_count) : v >> shift_count;
+    }
+    template <size_t N>
+    static constexpr fixed_width_uint<N> round_to_zero_rshift(fixed_width_uint<N> v, intmax_t shift_count)
+    {
+        return shift_count >= fixed_width_int<N>::bit_count ? (fixed_width_uint<N>)0 :
+            shift_count < 0 ? v << -shift_count :
+            v >> shift_count;
     }
     static constexpr signed_type get_add_sub_compare_compute_at_exponent(bool a_is_negative, signed_type a_mantissa, signed_type a_exponent, bool b_is_negative, signed_type b_mantissa, signed_type b_exponent)
     {
         return a_mantissa == (signed_type)0 ? b_exponent :
             b_mantissa == (signed_type)0 ? a_mantissa :
-                constexpr_max(a_exponent, b_exponent);
+                constexpr_max(a_exponent, b_exponent) - (signed_type)2;
     }
     static constexpr signed_type get_add_mantissa(bool a_is_negative, signed_type a_mantissa, signed_type a_exponent, bool b_is_negative, signed_type b_mantissa, signed_type b_exponent)
     {
@@ -323,9 +421,13 @@ private:
     {
         return (word_type)((double_word_type)a * (double_word_type)b >> radix_point_shift);
     }
+    static constexpr word_type round_word(word_type v)
+    {
+        return (v & (word_type)1) + (v >> 1);
+    }
     static constexpr word_type fractional_quotient(word_type a, word_type b)
     {
-        return (word_type)(((double_word_type)a << radix_point_shift) / (double_word_type)b);
+        return round_word((word_type)(((double_word_type)a << (radix_point_shift + 1)) / (double_word_type)b));
     }
     static constexpr word_type product_helper(ieee754_soft_float a_abs, ieee754_soft_float b_abs)
     {
@@ -450,7 +552,7 @@ public:
             isinf() ? (signbit() ? std::numeric_limits<fixed_width_int<N>>::min() : std::numeric_limits<fixed_width_int<N>>::max()) :
             *this >= -(ieee754_soft_float)std::numeric_limits<fixed_width_int<N>>::min() ? std::numeric_limits<fixed_width_int<N>>::max() :
             *this <= (ieee754_soft_float)std::numeric_limits<fixed_width_int<N>>::min() ? std::numeric_limits<fixed_width_int<N>>::min() :
-            *this < (ieee754_soft_float)1 && *this > (ieee754_soft_float)-1 ? (fixed_width_int<N>)0 :
+            *this < from_bits(one_word) && *this > -from_bits(one_word) ? (fixed_width_int<N>)0 :
             convert_to_int<N>();
     }
     template <size_t N>
@@ -459,23 +561,137 @@ public:
         return isnan() ? (fixed_width_uint<N>)0 :
             isinf() ? (signbit() ? (fixed_width_uint<N>)0 : std::numeric_limits<fixed_width_uint<N>>::max()) :
             *this >= (ieee754_soft_float)((fixed_width_uint<2 * N>)1 << N) ? std::numeric_limits<fixed_width_uint<N>>::max() :
-            *this < (ieee754_soft_float)1 ? (fixed_width_uint<N>)0 :
+            *this < (ieee754_soft_float)(word_type)1 ? (fixed_width_uint<N>)0 :
             convert_to_uint<N>();
     }
+private:
+    constexpr word_type get_floor_mask() const
+    {
+        return ((mantissa_mask | mantissa_implicit_bit) << (intmax_t)-get_integer_exponent_value()) & (mantissa_mask | mantissa_implicit_bit);
+    }
+    constexpr word_type floor_helper() const
+    {
+        return get_integer_exponent_value() >= (signed_type)0 ? get_bits() :
+                get_integer_exponent_value() < -(signed_type)mantissa_bit_count ? (signbit() ? one_word | sign_bit_mask : zero_word) :
+                (((mantissa_mask | mantissa_implicit_bit) ^ get_floor_mask()) & get_unsigned_mantissa_value()) == (word_type)0 ? get_bits() :
+                signbit() ? (from_bits(construct_float(true, get_unsigned_mantissa_value() & get_floor_mask(), get_unbiased_exponent_value())) - from_bits(one_word)).get_bits() : construct_float(false, get_unsigned_mantissa_value() & get_floor_mask(), get_unbiased_exponent_value());
+    }
+public:
+    friend constexpr ieee754_soft_float floor(ieee754_soft_float v)
+    {
+        return v.isnan() || v.isinf() || v.iszero() ? v :
+            v < from_bits(one_word) && v >= from_bits(zero_word) ? from_bits(zero_word) : from_bits(v.floor_helper());
+    }
+    friend constexpr ieee754_soft_float ceil(ieee754_soft_float v)
+    {
+        return -floor(-v);
+    }
+    friend constexpr ieee754_soft_float trunc(ieee754_soft_float v)
+    {
+        return v.signbit() ? ceil(v) : floor(v);
+    }
+private:
+    static constexpr word_type fractional_sqrt(word_type v)
+    {
+        return round_word((word_type)floor_sqrt((double_word_type)v << (radix_point_shift + 2)));
+    }
+public:
+    friend constexpr ieee754_soft_float sqrt(ieee754_soft_float v)
+    {
+        return v.isnan() || v.iszero() ? v :
+            v.signbit() ? from_bits(nan_word) :
+            v.isinf() ? from_bits(inf_word) :
+            (v.get_unbiased_exponent_value() & (signed_type)1) != (signed_type)0 ?
+                from_bits(construct_float(false, fractional_sqrt(v.get_unsigned_mantissa_value() << 1), (v.get_unbiased_exponent_value() - (signed_type)1) / (signed_type)2)) :
+            from_bits(construct_float(false, fractional_sqrt(v.get_unsigned_mantissa_value()), v.get_unbiased_exponent_value() / (signed_type)2));
+    }
+    static ieee754_soft_float sqrt_2()
+    {
+        static ieee754_soft_float retval = sqrt((ieee754_soft_float)(word_type)2);
+        return retval;
+    }
+    static ieee754_soft_float sqrt_1_2()
+    {
+        static ieee754_soft_float retval = sqrt((ieee754_soft_float)(word_type)1 / (ieee754_soft_float)(word_type)2);
+        return retval;
+    }
+private:
+    typedef typename ieee754_soft_float_std<padded_bit_count * 2>::type double_precision_type;
+    static constexpr double_precision_type square(double_precision_type v)
+    {
+        return v * v;
+    }
+    static ieee754_soft_float calc_pi_helper(double_precision_type a, double_precision_type b, double_precision_type t, double_precision_type p)
+    {
+        return a == b ? (ieee754_soft_float)(a * a / t) :
+            calc_pi_helper((a + b) / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2, sqrt(a * b), t - p * square(a - (a + b) / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2), p * (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2);
+    }
+    static ieee754_soft_float calc_pi()
+    {
+        return calc_pi_helper((double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1, double_precision_type::sqrt_1_2(), (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1 / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)4, (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1);
+    }
+public:
+    static ieee754_soft_float pi()
+    {
+        static ieee754_soft_float retval = calc_pi();
+        return retval;
+    };
     friend int main(int argc, char **argv);
     #warning remove friend main
 };
 
-typedef ieee754_soft_float<24, 8, true> ieee754_soft_float_32;
-typedef ieee754_soft_float<53, 11, true> ieee754_soft_float_64;
-typedef ieee754_soft_float<64, 15, false, 128 - 80> ieee754_soft_float_80;
-typedef ieee754_soft_float<113, 15, true> ieee754_soft_float_128;
-typedef ieee754_soft_float<237, 19, true> ieee754_soft_float_256;
-typedef ieee754_soft_float<489, 23, true> ieee754_soft_float_512;
-typedef ieee754_soft_float<997, 27, true> ieee754_soft_float_1024;
-typedef ieee754_soft_float<2048 - 31 - 1 + 1, 31, true> ieee754_soft_float_2048;
-typedef ieee754_soft_float<4096 - 35 - 1 + 1, 35, true> ieee754_soft_float_4096;
-typedef ieee754_soft_float<8192 - 39 - 1 + 1, 39, true> ieee754_soft_float_8192;
+template <size_t N>
+struct ieee754_soft_float_std<N, typename std::enable_if<N >= 64 && (N & (N - 1)) == 0>::type>
+{
+private:
+    static constexpr int log_base_2(uintmax_t value)
+    {
+        return value == 0 ? -1 :
+            (value >> 63) > 1U ? 64 + log_base_2((value >> 32) >> 32) :
+            (value >> 32) > 0U ? 32 + log_base_2(value >> 32) :
+            (value >> 16) > 0U ? 16 + log_base_2(value >> 16) :
+            (value >> 8) > 0U ? 8 + log_base_2(value >> 8) :
+            (value >> 4) > 0U ? 4 + log_base_2(value >> 4) :
+            (value >> 2) > 0U ? 2 + log_base_2(value >> 2) :
+            (value >> 1) > 0U ? 1 : 0;
+    }
+    static constexpr size_t exponent_bit_count = 4 * log_base_2(N) - 13;
+public:
+    typedef ieee754_soft_float<N - exponent_bit_count + 1 - 1, exponent_bit_count, true> type;
+};
+
+template <>
+struct ieee754_soft_float_std<8, void>
+{
+    typedef ieee754_soft_float<4, 4, true> type;
+};
+
+template <>
+struct ieee754_soft_float_std<16, void>
+{
+    typedef ieee754_soft_float<11, 5, true> type;
+};
+
+template <>
+struct ieee754_soft_float_std<32, void>
+{
+    typedef ieee754_soft_float<24, 8, true> type;
+};
+
+typedef typename ieee754_soft_float_std<8>::type ieee754_soft_float_8;
+typedef typename ieee754_soft_float_std<16>::type ieee754_soft_float_16;
+typedef typename ieee754_soft_float_std<32>::type ieee754_soft_float_32;
+typedef typename ieee754_soft_float_std<64>::type ieee754_soft_float_64;
+typedef typename ieee754_soft_float_std<128>::type ieee754_soft_float_128;
+typedef typename ieee754_soft_float_std<256>::type ieee754_soft_float_256;
+typedef typename ieee754_soft_float_std<512>::type ieee754_soft_float_512;
+typedef typename ieee754_soft_float_std<1024>::type ieee754_soft_float_1k;
+typedef typename ieee754_soft_float_std<2048>::type ieee754_soft_float_2k;
+typedef typename ieee754_soft_float_std<4096>::type ieee754_soft_float_4k;
+typedef typename ieee754_soft_float_std<8192>::type ieee754_soft_float_8k;
+typedef typename ieee754_soft_float_std<16384>::type ieee754_soft_float_16k;
+typedef typename ieee754_soft_float_std<32768>::type ieee754_soft_float_32k;
+typedef ieee754_soft_float<64, 15, false, 128 - 80> ieee754_soft_float_i387_80;
 
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::sign_bit_mask;
@@ -505,6 +721,93 @@ template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsIm
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::inf_word;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::zero_word;
+template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::one_word;
+//template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+//constexpr ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize> ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::pi;
+//template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+//constexpr ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize> ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::sqrt_2;
+//template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+//constexpr ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize> ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::sqrt_1_2;
 
+namespace std
+{
+template <size_t MBC, size_t EBC, bool MMII, size_t PS>
+struct numeric_limits<ieee754_soft_float<MBC, EBC, MMII, PS>>
+{
+private:
+    typedef ieee754_soft_float<MBC, EBC, MMII, PS> fp_type;
+private:
+    static constexpr intmax_t constexpr_ifloor(long double v)
+    {
+        return v < (intmax_t)v ? (intmax_t)v - 1 : (intmax_t)v;
+    }
+    static constexpr intmax_t constexpr_iceil(long double v)
+    {
+        return v > (intmax_t)v ? (intmax_t)v + 1 : (intmax_t)v;
+    }
+    static constexpr long double log10_2 = 0.30102999566398119521373889472449302676818988L;
+public:
+    static constexpr bool is_specialized = true;
+    static constexpr fp_type min()
+    {
+        return fp_type::make_min();
+    }
+    static constexpr fp_type max()
+    {
+        return fp_type::make_max();
+    }
+    static constexpr fp_type lowest()
+    {
+        return -fp_type::make_max();
+    }
+    static constexpr int digits = fp_type::mantissa_bit_count;
+    static constexpr int digits10 = (int)constexpr_ifloor(log10_2 * digits);
+    static constexpr int max_digits10 = (int)constexpr_iceil(log10_2 * digits);
+    static constexpr bool is_signed = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_exact = false;
+    static constexpr int radix = 2;
+    static constexpr fp_type epsilon()
+    {
+        return fp_type::make_epsilon();
+    }
+    static constexpr fp_type round_error()
+    {
+        return fp_type::make_round_error();
+    }
+    static constexpr intmax_t max_exponent = 1 << (fp_type::exponent_bit_count - 1);
+    static constexpr intmax_t min_exponent = 1 - max_exponent;
+    static constexpr intmax_t min_exponent10 = constexpr_iceil(min_exponent * log10_2);
+    static constexpr intmax_t max_exponent10 = constexpr_ifloor(max_exponent * log10_2);
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool has_signaling_NaN = true;
+    static constexpr float_denorm_style has_denorm = float_denorm_style::denorm_present;
+    static constexpr bool has_denorm_loss = false;
+    static constexpr fp_type infinity()
+    {
+        return fp_type::make_inf();
+    }
+    static constexpr fp_type quiet_NaN()
+    {
+        return fp_type::make_nan();
+    }
+    static constexpr fp_type signaling_NaN()
+    {
+        return fp_type::make_nan();
+    }
+    static constexpr fp_type denorm_min()
+    {
+        return fp_type::make_denormal_min();
+    }
+    static constexpr bool is_iec559 = true;
+    static constexpr bool is_bounded = false;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = false;
+    static constexpr bool tinyness_before = false;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+};
+}
 
 #endif // FLOAT_TYPES_H_INCLUDED

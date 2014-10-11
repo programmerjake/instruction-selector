@@ -12,6 +12,7 @@
 				<Option type="1" />
 				<Option compiler="gcc" />
 				<Compiler>
+					<Add option="-O2" />
 					<Add option="-g" />
 				</Compiler>
 			</Target>
@@ -30,8 +31,8 @@
 		</Build>
 		<Compiler>
 			<Add option="-Wall" />
-			<Add option="-std=c++11" />
 			<Add option="-fexceptions" />
+			<Add option="-std=c++1y" />
 		</Compiler>
 		<Unit filename="float_types.h" />
 		<Unit filename="instruction_list.h" />
