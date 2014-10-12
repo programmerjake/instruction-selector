@@ -5,6 +5,12 @@
 #include <cmath>
 #include <type_traits>
 
+#if __cplusplus > 201103L
+#define cpp14_constexpr constexpr
+#else
+#define cpp14_constexpr
+#endif
+
 template <size_t N, typename = void>
 struct ieee754_soft_float_std;
 
@@ -33,12 +39,13 @@ private:
     static constexpr word_type sign_bit_mask = (word_type)1 << sign_bit_shift;
     static constexpr word_type exponent_mask = (((word_type)1 << exponent_bit_count) - (word_type)1) << exponent_shift;
     static constexpr word_type exponent_bias = ((word_type)1 << (exponent_bit_count - 1)) - (word_type)1;
-    static constexpr word_type inf_nan_biased_exponent = exponent_mask >> exponent_shift;
-    static constexpr word_type denormal_zero_biased_exponent = (word_type)0;
+    static constexpr word_type inf_nan_exponent = exponent_mask >> exponent_shift;
+    static constexpr word_type inf_nan_biased_exponent = inf_nan_exponent;
+    static constexpr word_type denormal_zero_exponent = (word_type)0;
     static constexpr signed_type inf_nan_unbiased_exponent = (signed_type)inf_nan_biased_exponent - (signed_type)exponent_bias;
-    static constexpr signed_type denormal_zero_unbiased_exponent = (signed_type)denormal_zero_biased_exponent - (signed_type)exponent_bias;
-    static constexpr signed_type denormal_actual_exponent = denormal_zero_unbiased_exponent + (signed_type)1;
-    static constexpr signed_type min_denormal_normalized_exponent = denormal_actual_exponent - (signed_type)(intmax_t)mantissa_bit_count;
+    static constexpr word_type denormal_biased_actual_exponent = (word_type)1;
+    static constexpr signed_type denormal_unbiased_actual_exponent = (signed_type)denormal_biased_actual_exponent - (signed_type)exponent_bias;
+    static constexpr signed_type min_denormal_normalized_exponent = denormal_unbiased_actual_exponent - (signed_type)(intmax_t)mantissa_bit_count;
     static constexpr word_type mantissa_mask = ((word_type)1 << (mantissa_bit_count - (mantissa_msb_is_implicit ? 1 : 0))) - (word_type)1;
     static constexpr word_type mantissa_implicit_bit = mantissa_msb_is_implicit ? (word_type)1 << (mantissa_bit_count - 1) : (word_type)0;
     static constexpr word_type nan_word = exponent_mask | (word_type)1;
@@ -72,7 +79,7 @@ private:
     {
         return std::get<0>(v) == (word_type)0 || std::get<1>(v) < min_denormal_normalized_exponent ? zero_word :
             std::get<1>(v) >= inf_nan_unbiased_exponent ? inf_word :
-            std::get<1>(v) <= denormal_zero_unbiased_exponent ? construct_float_helper(std::get<0>(v) >> (intmax_t)(denormal_actual_exponent - std::get<1>(v)), denormal_zero_biased_exponent) :
+            std::get<1>(v) < denormal_unbiased_actual_exponent ? construct_float_helper(std::get<0>(v) >> (intmax_t)(denormal_unbiased_actual_exponent - std::get<1>(v)), denormal_zero_exponent) :
             construct_float_helper(std::get<0>(v), (word_type)(std::get<1>(v) + (signed_type)exponent_bias));
     }
     static constexpr word_type construct_float_helper(bool is_negative, std::pair<word_type, signed_type> v)
@@ -83,26 +90,34 @@ private:
     {
         return construct_float_helper(std::get<0>(v) < (signed_type)0, std::pair<word_type, signed_type>((word_type)abs(std::get<0>(v)), std::get<1>(v)));
     }
-    template <size_t fractional_part_size = radix_point_shift, size_t N, typename = typename std::enable_if<(N >= bit_count)>::type>
+    static constexpr std::pair<signed_type, signed_type> normalize_signed_helper(bool is_negative, std::pair<word_type, signed_type> v)
+    {
+        return is_negative ? std::pair<signed_type, signed_type>(-(signed_type)std::get<0>(v), std::get<1>(v)) : std::pair<signed_type, signed_type>((signed_type)std::get<0>(v), std::get<1>(v));
+    }
+    template <size_t fractional_part_size = radix_point_shift, size_t N>
     static constexpr std::pair<signed_type, signed_type> normalize(fixed_width_int<N> mantissa, signed_type exponent)
     {
-        return mantissa == (signed_type)0 ? std::pair<signed_type, signed_type>((signed_type)mantissa, (signed_type)0) :
-            (fixed_width_uint<N>)abs(mantissa) >> fractional_part_size == (fixed_width_uint<N>)0 ? normalize<fractional_part_size>(mantissa << 1, exponent - (signed_type)1) :
-            (fixed_width_uint<N>)abs(mantissa) >> fractional_part_size > (fixed_width_uint<N>)1 ? normalize<fractional_part_size>(mantissa >= (fixed_width_int<N>)0 ? mantissa >> 1 : -(-mantissa >> 1), exponent + (signed_type)1) :
-            std::pair<signed_type, signed_type>((signed_type)mantissa, exponent);
-    }
-    template <size_t fractional_part_size = radix_point_shift, size_t N, typename = typename std::enable_if<(N < bit_count)>::type>
-    static constexpr std::pair<word_type, signed_type> normalize(fixed_width_int<N> mantissa, signed_type exponent)
-    {
-        return normalize((signed_type)mantissa, exponent);
+        return normalize_signed_helper(mantissa < (fixed_width_int<N>)0, normalize<fractional_part_size>((fixed_width_uint<N>)mantissa, exponent));
     }
     template <size_t fractional_part_size = radix_point_shift, size_t N, typename = typename std::enable_if<(N >= bit_count)>::type>
     static constexpr std::pair<word_type, signed_type> normalize(fixed_width_uint<N> mantissa, signed_type exponent)
     {
+#if __cplusplus > 201103L
+        if(mantissa == (fixed_width_uint<N>)0)
+            return std::pair<word_type, signed_type>((word_type)mantissa, (signed_type)0);
+        intmax_t lshift_amount = (intmax_t)fractional_part_size - ilog2(mantissa);
+        exponent -= (signed_type)lshift_amount;
+        if(lshift_amount > 0)
+            mantissa <<= lshift_amount;
+        else if(lshift_amount < 0)
+            mantissa >>= -lshift_amount;
+        return std::pair<word_type, signed_type>((word_type)mantissa, exponent);
+#else
         return mantissa == (fixed_width_uint<N>)0 ? std::pair<word_type, signed_type>((word_type)mantissa, (signed_type)0) :
             mantissa >> fractional_part_size == (fixed_width_uint<N>)0 ? normalize<fractional_part_size>(mantissa << 1, exponent - (signed_type)1) :
             mantissa >> fractional_part_size > (fixed_width_uint<N>)1 ? normalize<fractional_part_size>(mantissa >> 1, exponent + (signed_type)1) :
             std::pair<word_type, signed_type>((word_type)mantissa, exponent);
+#endif
     }
     template <size_t fractional_part_size = radix_point_shift, size_t N, typename = void, typename = typename std::enable_if<(N < bit_count)>::type>
     static constexpr std::pair<word_type, signed_type> normalize(fixed_width_uint<N> mantissa, signed_type exponent)
@@ -129,9 +144,13 @@ private:
     {
         return construct_float(false, value, (signed_type)radix_point_shift);
     }
-    constexpr word_type get_biased_exponent_value() const
+    constexpr word_type get_exponent_bits() const
     {
         return (word & exponent_mask) >> exponent_shift;
+    }
+    constexpr word_type get_biased_exponent_value() const
+    {
+        return get_exponent_bits() == denormal_zero_exponent ? denormal_biased_actual_exponent : get_exponent_bits();
     }
     constexpr signed_type get_unbiased_exponent_value() const
     {
@@ -147,7 +166,7 @@ private:
     }
     constexpr word_type get_unsigned_mantissa_value() const
     {
-        return get_unbiased_exponent_value() == denormal_zero_unbiased_exponent ? get_mantissa_bits() : get_mantissa_bits() | mantissa_implicit_bit;
+        return get_exponent_bits() == denormal_zero_exponent ? get_mantissa_bits() : get_mantissa_bits() | mantissa_implicit_bit;
     }
     constexpr signed_type get_signed_mantissa_value() const
     {
@@ -309,7 +328,6 @@ private:
             v.isinf() ? inf_word :
             v.iszero() || exponent_too_small(v.get_unbiased_exponent_value()) ? zero_word :
             exponent_too_big(v.get_unbiased_exponent_value()) ? inf_word :
-            v.isdenormal() ? construct_float(false, v.get_unsigned_mantissa_value(), (signed_type)r_float_type::denormal_actual_exponent + (signed_type)((intmax_t)radix_point_shift - (intmax_t)r_float_type::radix_point_shift)) :
             construct_float(false, v.get_unsigned_mantissa_value(), (signed_type)v.get_unbiased_exponent_value() + (signed_type)((intmax_t)radix_point_shift - (intmax_t)r_float_type::radix_point_shift));
     }
 public:
@@ -332,15 +350,15 @@ public:
     }
     constexpr bool iszero() const
     {
-        return get_biased_exponent_value() == denormal_zero_biased_exponent && get_mantissa_bits() == (word_type)0;
+        return get_exponent_bits() == denormal_zero_exponent && get_mantissa_bits() == (word_type)0;
     }
     constexpr bool isdenormal() const
     {
-        return get_biased_exponent_value() == denormal_zero_biased_exponent && get_mantissa_bits() != (word_type)0;
+        return get_exponent_bits() == denormal_zero_exponent && get_mantissa_bits() != (word_type)0;
     }
     constexpr bool isnormal() const
     {
-        return get_biased_exponent_value() != denormal_zero_biased_exponent && get_biased_exponent_value() != inf_nan_biased_exponent;
+        return get_exponent_bits() != denormal_zero_exponent && get_exponent_bits() != inf_nan_exponent;
     }
     constexpr bool signbit() const
     {
@@ -455,19 +473,19 @@ public:
     {
         return from_bits(quotient_helper(abs(a), abs(b)) | ((a.word ^ b.word) & sign_bit_mask));
     }
-    const ieee754_soft_float operator +=(ieee754_soft_float r)
+    cpp14_constexpr const ieee754_soft_float operator +=(ieee754_soft_float r)
     {
         return *this = *this + r;
     }
-    const ieee754_soft_float operator -=(ieee754_soft_float r)
+    cpp14_constexpr const ieee754_soft_float operator -=(ieee754_soft_float r)
     {
         return *this = *this - r;
     }
-    const ieee754_soft_float operator *=(ieee754_soft_float r)
+    cpp14_constexpr const ieee754_soft_float operator *=(ieee754_soft_float r)
     {
         return *this = *this * r;
     }
-    const ieee754_soft_float operator /=(ieee754_soft_float r)
+    cpp14_constexpr const ieee754_soft_float operator /=(ieee754_soft_float r)
     {
         return *this = *this / r;
     }
@@ -616,7 +634,7 @@ public:
         return retval;
     }
 private:
-    typedef typename ieee754_soft_float_std<padded_bit_count * 2>::type double_precision_type;
+    typedef typename ieee754_soft_float_std<padded_bit_count < 16 ? 32 : padded_bit_count * 2>::type double_precision_type;
     static constexpr double_precision_type square(double_precision_type v)
     {
         return v * v;
@@ -636,6 +654,110 @@ public:
         static ieee754_soft_float retval = calc_pi();
         return retval;
     };
+private:
+    static double_precision_type calc_log1p_range_limited(double_precision_type v)
+    {
+        if(abs(v) >= (double_precision_type)(uintmax_t)1 / (double_precision_type)(uintmax_t)256)
+        {
+            return (double_precision_type)(uintmax_t)2 * calc_log1p_range_limited(sqrt(v + (double_precision_type)(uintmax_t)1) - (double_precision_type)(uintmax_t)1);
+        }
+        double_precision_type power = v;
+        double_precision_type retval = (double_precision_type)(uintmax_t)0;
+        for(uintmax_t i = 1; ; i++, power *= v)
+        {
+            double_precision_type divisor(i);
+            double_precision_type term = power / divisor;
+            double_precision_type old_retval = retval;
+            if(i % 2 == 1)
+                retval += term;
+            else
+                retval -= term;
+            if(retval == old_retval)
+                break;
+        }
+        return retval;
+    }
+    static double_precision_type ln2_double()
+    {
+        static double_precision_type retval = calc_log1p_range_limited((double_precision_type)(uintmax_t)1);
+        return retval;
+    }
+    static cpp14_constexpr ieee754_soft_float log2_helper(ieee754_soft_float v)
+    {
+        signed_type exponent = ilogb(v);
+        ieee754_soft_float retval = (ieee754_soft_float)exponent;
+        v = scalbn(v, -exponent);
+        for(size_t i = 0; i < mantissa_bit_count; i++)
+        {
+            v *= v;
+            if(v >= (ieee754_soft_float)(uintmax_t)2)
+            {
+                retval += scalbn((ieee754_soft_float)(uintmax_t)1, (signed_type)(-1 - (intmax_t)i));
+                v = scalbn(v, (signed_type)(intmax_t)-1);
+            }
+        }
+        return retval;
+    }
+public:
+    static constexpr signed_type ilogb_zero = std::numeric_limits<signed_type>::min();
+    static constexpr signed_type ilogb_nan = -std::numeric_limits<signed_type>::max();
+    friend constexpr signed_type ilogb(ieee754_soft_float v)
+    {
+        return v.isnan() ? ilogb_nan :
+            v.iszero() ? ilogb_zero :
+            v.isinf() ? std::numeric_limits<signed_type>::max() :
+            std::get<1>(normalize(v.get_unsigned_mantissa_value(), v.get_unbiased_exponent_value()));
+    }
+    friend constexpr ieee754_soft_float scalbn(ieee754_soft_float v, signed_type exponent)
+    {
+        return v.isnan() || v.isinf() || v.iszero() ? v :
+            exponent > (signed_type)exponent_bias * (signed_type)(intmax_t)4 ? (v.signbit() ? -make_inf() : make_inf()) :
+            exponent < (signed_type)exponent_bias * (signed_type)(intmax_t)-4 ? (v.signbit() ? -from_bits(zero_word) : from_bits(zero_word)) :
+            from_bits(construct_float(v.signbit(), v.get_unsigned_mantissa_value(), v.get_unbiased_exponent_value() + exponent));
+    }
+    friend constexpr ieee754_soft_float ldexp(ieee754_soft_float v, signed_type exponent)
+    {
+        return scalbn(v, exponent);
+    }
+    friend cpp14_constexpr ieee754_soft_float log2(ieee754_soft_float v)
+    {
+        if(v.isnan())
+            return v;
+        if(v.signbit() || v.iszero())
+            return make_nan();
+        if(v.isinf())
+            return v;
+        auto exponent = ilogb(v);
+        return (ieee754_soft_float)exponent + log2_helper(scalbn(v, -exponent));
+    }
+    static cpp14_constexpr ieee754_soft_float log2_10()
+    {
+#if __cplusplus > 201103L
+        constexpr
+#else
+        static
+#endif
+        ieee754_soft_float retval = (ieee754_soft_float)log2((double_precision_type)(uintmax_t)10);
+        return retval;
+    }
+    static cpp14_constexpr ieee754_soft_float log10_2()
+    {
+#if __cplusplus > 201103L
+        constexpr
+#else
+        static
+#endif
+        ieee754_soft_float retval = (ieee754_soft_float)((double_precision_type)(uintmax_t)1 / log2((double_precision_type)(uintmax_t)10));
+        return retval;
+    }
+    friend cpp14_constexpr ieee754_soft_float log10(ieee754_soft_float v)
+    {
+        return log2(v) / lg10();
+    }
+    static ieee754_soft_float ln2()
+    {
+        return (ieee754_soft_float)ln2_double();
+    }
     friend int main(int argc, char **argv);
     #warning remove friend main
 };
@@ -702,13 +824,13 @@ constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantis
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::inf_nan_biased_exponent;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
-constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::denormal_zero_biased_exponent;
+constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::denormal_biased_actual_exponent;
+template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::denormal_zero_exponent;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::inf_nan_unbiased_exponent;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
-constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::denormal_zero_unbiased_exponent;
-template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
-constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::denormal_actual_exponent;
+constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::denormal_unbiased_actual_exponent;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::min_denormal_normalized_exponent;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
@@ -723,6 +845,10 @@ template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsIm
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::zero_word;
 template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::word_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::one_word;
+template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::ilogb_nan;
+template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
+constexpr typename ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::signed_type ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::ilogb_zero;
 //template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
 //constexpr ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize> ieee754_soft_float<mantissaBitCount, exponentBitCount, mantissaMsbIsImplicit, paddingSize>::pi;
 //template <size_t mantissaBitCount, size_t exponentBitCount, bool mantissaMsbIsImplicit, size_t paddingSize>
@@ -776,8 +902,8 @@ public:
     {
         return fp_type::make_round_error();
     }
-    static constexpr intmax_t max_exponent = 1 << (fp_type::exponent_bit_count - 1);
-    static constexpr intmax_t min_exponent = 1 - max_exponent;
+    static constexpr intmax_t max_exponent = (intmax_t)1 << (fp_type::exponent_bit_count - 1);
+    static constexpr intmax_t min_exponent = (intmax_t)1 - max_exponent;
     static constexpr intmax_t min_exponent10 = constexpr_iceil(min_exponent * log10_2);
     static constexpr intmax_t max_exponent10 = constexpr_ifloor(max_exponent * log10_2);
     static constexpr bool has_infinity = true;

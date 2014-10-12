@@ -4,15 +4,14 @@
 	<Project>
 		<Option title="instruction-selector" />
 		<Option pch_mode="2" />
-		<Option compiler="gcc" />
+		<Option compiler="clang" />
 		<Build>
 			<Target title="Debug">
 				<Option output="bin/Debug/instruction-selector" prefix_auto="1" extension_auto="1" />
 				<Option object_output="obj/Debug/" />
 				<Option type="1" />
-				<Option compiler="gcc" />
+				<Option compiler="clang" />
 				<Compiler>
-					<Add option="-O2" />
 					<Add option="-g" />
 				</Compiler>
 			</Target>
@@ -20,7 +19,7 @@
 				<Option output="bin/Release/instruction-selector" prefix_auto="1" extension_auto="1" />
 				<Option object_output="obj/Release/" />
 				<Option type="1" />
-				<Option compiler="gcc" />
+				<Option compiler="clang" />
 				<Compiler>
 					<Add option="-O3" />
 				</Compiler>
@@ -31,8 +30,7 @@
 		</Build>
 		<Compiler>
 			<Add option="-Wall" />
-			<Add option="-fexceptions" />
-			<Add option="-std=c++1y" />
+			<Add option="-std=c++1y -fconstexpr-steps=10000000" />
 		</Compiler>
 		<Unit filename="float_types.h" />
 		<Unit filename="instruction_list.h" />

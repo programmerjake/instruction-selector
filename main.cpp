@@ -112,7 +112,7 @@ void dump_fn(const char *value_name, typename ieee754_soft_float_std<N>::type::s
 
 int main(int argc, char **argv)
 {
-    typedef ieee754_soft_float_512 fp_type;
+    typedef ieee754_soft_float_64 fp_type;
 
     auto pow10v = (fp_type)(uintmax_t)1;
 
@@ -121,6 +121,9 @@ int main(int argc, char **argv)
 
     dumpf(fp_type::pi());
     dumpbi((fp_type::word_type)(fp_type::pi() * pow10v));
+    auto v = fp_type::lg10();
+    dumpf(v);
+    dumpbi((fp_type::word_type)(v * pow10v));
 
     return 0;
 }

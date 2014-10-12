@@ -11,11 +11,17 @@
 #include <sstream>
 #include <type_traits>
 
+#if __cplusplus > 201103L
+#define cpp14_constexpr constexpr
+#else
+#define cpp14_constexpr
+#endif
+
 template <size_t bitCount>
 struct fixed_width_uint final
 {
     template <size_t N>
-    friend class fixed_width_uint;
+    friend struct fixed_width_uint;
     static constexpr size_t bit_count = bitCount;
     static_assert(bit_count >= 8, "invalid bit count for fixed_width_uint : must be at least 8");
     static_assert((bit_count & (bit_count - 1)) == 0, "invalid bit count for fixed_width_uint : must be a power of 2");
@@ -68,9 +74,21 @@ private:
     }
     static constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod_helper(fixed_width_uint dividend, fixed_width_uint divisor, int bit_index, fixed_width_uint quotient)
     {
+#if __cplusplus > 201103L
+        for(; bit_index >= 0; bit_index--)
+        {
+            if(dividend >= (divisor << bit_index))
+            {
+                dividend -= (divisor << bit_index);
+                quotient |= (fixed_width_uint(1) << bit_index);
+            }
+        }
+        return std::pair<fixed_width_uint, fixed_width_uint>(quotient, dividend);
+#else
         return bit_index < 0 ? std::pair<fixed_width_uint, fixed_width_uint>(quotient, dividend) :
             dividend >= (divisor << bit_index) ? divmod_helper(dividend - (divisor << bit_index), divisor, bit_index - 1, quotient | (fixed_width_uint(1) << bit_index)) :
             divmod_helper(dividend, divisor, bit_index - 1, quotient);
+#endif
     }
     static constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod(fixed_width_uint dividend, fixed_width_uint divisor)
     {
@@ -130,6 +148,31 @@ public:
     {
         return fixed_width_uint(~highPart, ~lowPart);
     }
+    cpp14_constexpr const fixed_width_uint &operator ++()
+    {
+        if(++lowPart == (fixed_width_uint)0)
+            ++highPart;
+        return *this;
+    }
+    cpp14_constexpr const fixed_width_uint &operator --()
+    {
+        if(lowPart == (fixed_width_uint)0)
+            --highPart;
+        --lowPart;
+        return *this;
+    }
+    cpp14_constexpr fixed_width_uint operator ++(int)
+    {
+        fixed_width_uint retval = *this;
+        operator ++();
+        return retval;
+    }
+    cpp14_constexpr fixed_width_uint operator --(int)
+    {
+        fixed_width_uint retval = *this;
+        operator --();
+        return retval;
+    }
     friend constexpr fixed_width_uint operator *(fixed_width_uint a, fixed_width_uint b)
     {
         return get_product(a, b);
@@ -146,31 +189,31 @@ public:
     {
         return fixed_width_uint(a.highPart ^ b.highPart, a.lowPart ^ b.lowPart);
     }
-    const fixed_width_uint &operator +=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator +=(fixed_width_uint r)
     {
         return *this = get_sum(*this, r);
     }
-    const fixed_width_uint &operator -=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator -=(fixed_width_uint r)
     {
         return *this = get_difference(*this, r);
     }
-    const fixed_width_uint &operator *=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator *=(fixed_width_uint r)
     {
         return *this = get_product(*this, r);
     }
-    const fixed_width_uint &operator &=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator &=(fixed_width_uint r)
     {
         highPart &= r.highPart;
         lowPart &= r.lowPart;
         return *this;
     }
-    const fixed_width_uint &operator |=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator |=(fixed_width_uint r)
     {
         highPart |= r.highPart;
         lowPart |= r.lowPart;
         return *this;
     }
-    const fixed_width_uint &operator ^=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator ^=(fixed_width_uint r)
     {
         highPart ^= r.highPart;
         lowPart ^= r.lowPart;
@@ -192,11 +235,11 @@ public:
             b > half_width_type::bit_count ? fixed_width_uint(half_width_type(0), a.highPart >> (b - half_width_type::bit_count)) :
             fixed_width_uint(a.highPart >> b, (a.highPart << (half_width_type::bit_count - b)) | (a.lowPart >> b));
     }
-    const fixed_width_uint &operator <<=(size_t r)
+    cpp14_constexpr const fixed_width_uint &operator <<=(size_t r)
     {
         return *this = *this << r;
     }
-    const fixed_width_uint &operator >>=(size_t r)
+    cpp14_constexpr const fixed_width_uint &operator >>=(size_t r)
     {
         return *this = *this >> r;
     }
@@ -232,11 +275,11 @@ public:
     {
         return std::get<1>(divmod(a, b));
     }
-    const fixed_width_uint &operator /=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator /=(fixed_width_uint r)
     {
         return *this = *this / r;
     }
-    const fixed_width_uint &operator %=(fixed_width_uint r)
+    cpp14_constexpr const fixed_width_uint &operator %=(fixed_width_uint r)
     {
         return *this = *this % r;
     }
@@ -328,14 +371,34 @@ public:
 private:
     static constexpr fixed_width_uint floor_sqrt_helper(fixed_width_uint v, fixed_width_uint bit, fixed_width_uint retval)
     {
+#if __cplusplus > 201103L
+        for(; bit != (fixed_width_uint)0; bit = bit >> 2)
+        {
+            if(v >= bit + retval)
+            {
+                v = v - (bit + retval);
+                retval = (retval >> 1) | bit;
+            }
+            else
+            {
+                retval = retval >> 1;
+            }
+        }
+        return retval;
+#else
         return bit == (fixed_width_uint)0 ? retval :
             v >= bit + retval ? floor_sqrt_helper(v - (bit + retval), bit >> 2, (retval >> 1) | bit) :
             floor_sqrt_helper(v, bit >> 2, retval >> 1);
+#endif
     }
 public:
     friend constexpr fixed_width_uint floor_sqrt(fixed_width_uint v)
     {
         return floor_sqrt_helper(v, (fixed_width_uint)1 << ((bit_count - 1) & ~1), (fixed_width_uint)0);
+    }
+    friend constexpr intmax_t ilog2(fixed_width_uint v)
+    {
+        return v.highPart == (half_width_type)0 ? ilog2(v.lowPart) : half_width_type::bit_count + ilog2(v.highPart);
     }
 };
 
@@ -346,7 +409,7 @@ template <size_t bitCount>
 struct fixed_width_int final
 {
     template <size_t>
-    friend class fixed_width_int;
+    friend struct fixed_width_int;
     static constexpr size_t bit_count = bitCount;
     static_assert(bit_count >= 8, "invalid bit count for fixed_width_int : must be at least 8");
     static_assert((bit_count & (bit_count - 1)) == 0, "invalid bit count for fixed_width_int : must be a power of 2");
@@ -425,21 +488,21 @@ public:
     {
         return (a.value & sign_bit) != (fixed_width_uint<bit_count>)0 ? ((b.value & sign_bit) != (fixed_width_uint<bit_count>)0 ? fixed_width_int(-(-a.value % -b.value)) : fixed_width_int(-(-a.value % b.value))) : ((b.value & sign_bit) != (fixed_width_uint<bit_count>)0 ? fixed_width_int(a.value / -b.value) : fixed_width_int(a.value / b.value));
     }
-    const fixed_width_int &operator ++()
+    cpp14_constexpr const fixed_width_int &operator ++()
     {
         ++value;
         return *this;
     }
-    const fixed_width_int &operator --()
+    cpp14_constexpr const fixed_width_int &operator --()
     {
         --value;
         return *this;
     }
-    fixed_width_int operator ++(int)
+    cpp14_constexpr fixed_width_int operator ++(int)
     {
         return fixed_width_int(value++);
     }
-    fixed_width_int operator --(int)
+    cpp14_constexpr fixed_width_int operator --(int)
     {
         return fixed_width_int(value--);
     }
@@ -455,43 +518,43 @@ public:
     {
         return *this;
     }
-    const fixed_width_int &operator +=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator +=(fixed_width_int r)
     {
         return *this = *this + r;
     }
-    const fixed_width_int &operator -=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator -=(fixed_width_int r)
     {
         return *this = *this - r;
     }
-    const fixed_width_int &operator *=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator *=(fixed_width_int r)
     {
         return *this = *this * r;
     }
-    const fixed_width_int &operator /=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator /=(fixed_width_int r)
     {
         return *this = *this / r;
     }
-    const fixed_width_int &operator %=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator %=(fixed_width_int r)
     {
         return *this = *this % r;
     }
-    const fixed_width_int &operator &=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator &=(fixed_width_int r)
     {
         return *this = *this & r;
     }
-    const fixed_width_int &operator |=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator |=(fixed_width_int r)
     {
         return *this = *this | r;
     }
-    const fixed_width_int &operator ^=(fixed_width_int r)
+    cpp14_constexpr const fixed_width_int &operator ^=(fixed_width_int r)
     {
         return *this = *this ^ r;
     }
-    const fixed_width_int &operator <<=(size_t r)
+    cpp14_constexpr const fixed_width_int &operator <<=(size_t r)
     {
         return *this = *this << r;
     }
-    const fixed_width_int &operator >>=(size_t r)
+    cpp14_constexpr const fixed_width_int &operator >>=(size_t r)
     {
         return *this = *this >> r;
     }
@@ -577,6 +640,10 @@ public:
     static constexpr fixed_width_int abs(fixed_width_int v)
     {
         return (v.value & sign_bit) == (fixed_width_uint<bit_count>)0 ? v : -v;
+    }
+    friend constexpr intmax_t ilog2(fixed_width_int v)
+    {
+        return v <= (fixed_width_int)0 ? -1 : ilog2((fixed_width_uint<bit_count>)v);
     }
 };
 
@@ -754,9 +821,9 @@ template <typename T, size_t bitCount, typename childClass, typename biggestIntT
 class builtin_fixed_width_int
 {
     template <size_t N>
-    friend class fixed_width_int;
+    friend struct fixed_width_int;
     template <size_t N>
-    friend class fixed_width_uint;
+    friend struct fixed_width_uint;
     T value;
 protected:
     struct make_flag_t
@@ -795,19 +862,19 @@ public:
     {
         return make(~value);
     }
-    childClass operator ++()
+    cpp14_constexpr childClass operator ++()
     {
         return make(++value);
     }
-    childClass operator --()
+    cpp14_constexpr childClass operator --()
     {
         return make(--value);
     }
-    childClass operator ++(int)
+    cpp14_constexpr childClass operator ++(int)
     {
         return make(value++);
     }
-    childClass operator --(int)
+    cpp14_constexpr childClass operator --(int)
     {
         return make(value--);
     }
@@ -875,43 +942,43 @@ public:
     {
         return make(a.value ^ b.value);
     }
-    childClass operator *=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator *=(builtin_fixed_width_int r)
     {
         return make(value *= r.value);
     }
-    childClass operator /=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator /=(builtin_fixed_width_int r)
     {
         return make(value /= r.value);
     }
-    childClass operator %=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator %=(builtin_fixed_width_int r)
     {
         return make(value %= r.value);
     }
-    childClass operator +=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator +=(builtin_fixed_width_int r)
     {
         return make(value += r.value);
     }
-    childClass operator -=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator -=(builtin_fixed_width_int r)
     {
         return make(value -= r.value);
     }
-    childClass operator <<=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator <<=(size_t r)
     {
-        return make(value <<= r.value);
+        return make(value <<= r);
     }
-    childClass operator >>=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator >>=(size_t r)
     {
-        return make(value >>= r.value);
+        return make(value >>= r);
     }
-    childClass operator &=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator &=(builtin_fixed_width_int r)
     {
         return make(value &= r.value);
     }
-    childClass operator |=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator |=(builtin_fixed_width_int r)
     {
         return make(value |= r.value);
     }
-    childClass operator ^=(builtin_fixed_width_int r)
+    cpp14_constexpr childClass operator ^=(builtin_fixed_width_int r)
     {
         return make(value ^= r.value);
     }
@@ -934,10 +1001,26 @@ private:
             v.value >= bit.value + retval.value ? floor_sqrt_helper(v - (bit + retval), bit >> 2, (retval >> 1) | bit) :
             floor_sqrt_helper(v, bit >> 2, retval >> 1);
     }
+    static constexpr intmax_t ilog2(uintmax_t v)
+    {
+        return v <= 0 ? -1 :
+            (v >> 32) != 0 ? 32 + ilog2(v >> 32) :
+            (v >> 16) != 0 ? 16 + ilog2(v >> 16) :
+            (v >> 8) != 0 ? 8 + ilog2(v >> 8) :
+            (v >> 4) != 0 ? 4 + ilog2(v >> 4) :
+            (v >> 2) != 0 ? 2 + ilog2(v >> 2) :
+            (v >> 1) != 0 ? 1 + ilog2(v >> 1) :
+            0;
+    }
 public:
     friend constexpr childClass floor_sqrt(builtin_fixed_width_int v)
     {
         return floor_sqrt_helper(v, make(1) << ((bit_count - 1) & ~1), make(0));
+    }
+    friend constexpr intmax_t ilog2(builtin_fixed_width_int v)
+    {
+        return v.value <= 0 ? -1 :
+            ilog2((uintmax_t)v.value);
     }
 };
 
