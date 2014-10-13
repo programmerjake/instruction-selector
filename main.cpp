@@ -121,9 +121,32 @@ int main(int argc, char **argv)
 
     dumpf(fp_type::pi());
     dumpbi((fp_type::word_type)(fp_type::pi() * pow10v));
-    auto v = fp_type::lg10();
+    auto v = fp_type::log10_2();
     dumpf(v);
     dumpbi((fp_type::word_type)(v * pow10v));
+    uintmax_t limit = 0x10000;
+    for(uintmax_t n = 0; n < limit; n++)
+    {
+        if((n + 1) % 0x100 == 0)
+            cout << setw(15) << n << " " << (100 * n / limit) << "%\x1b[K\r" << flush;
+        uintmax_t result1 = (uintmax_t)floor_sqrt((fixed_width_uint<32>)n), result2;
+        if(n > 1)
+        {
+            uintmax_t x = 4 * n, lastx = x - 2;
+            while(abs((intmax_t)x - (intmax_t)lastx) > 1)
+            {
+                lastx = x;
+                x = (x + n * 4 / x) >> 1;
+            }
+            result2 = x / 2;
+        }
+        else
+            result2 = n;
+        if(result1 != result2)
+        {
+            cout << n << "\x1b[K\n " << result1 << "\n " << result2 << endl;
+        }
+    }
 
     return 0;
 }

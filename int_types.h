@@ -74,6 +74,7 @@ private:
     }
     static constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod_helper(fixed_width_uint dividend, fixed_width_uint divisor, int bit_index, fixed_width_uint quotient)
     {
+        // use new sqrt algorithm once we speed up division
 #if __cplusplus > 201103L
         for(; bit_index >= 0; bit_index--)
         {
@@ -371,6 +372,7 @@ public:
 private:
     static constexpr fixed_width_uint floor_sqrt_helper(fixed_width_uint v, fixed_width_uint bit, fixed_width_uint retval)
     {
+        // use new sqrt algorithm once we speed up division
 #if __cplusplus > 201103L
         for(; bit != (fixed_width_uint)0; bit = bit >> 2)
         {

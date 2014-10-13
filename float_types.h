@@ -752,7 +752,7 @@ public:
     }
     friend cpp14_constexpr ieee754_soft_float log10(ieee754_soft_float v)
     {
-        return log2(v) / lg10();
+        return log2(v) / log10_2();
     }
     static ieee754_soft_float ln2()
     {
