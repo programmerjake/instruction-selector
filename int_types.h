@@ -151,13 +151,13 @@ public:
     }
     cpp14_constexpr const fixed_width_uint &operator ++()
     {
-        if(++lowPart == (fixed_width_uint)0)
+        if(++lowPart == (half_width_type)0)
             ++highPart;
         return *this;
     }
     cpp14_constexpr const fixed_width_uint &operator --()
     {
-        if(lowPart == (fixed_width_uint)0)
+        if(lowPart == (half_width_type)0)
             --highPart;
         --lowPart;
         return *this;
