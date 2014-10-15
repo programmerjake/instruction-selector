@@ -141,10 +141,66 @@ void test_sqrt()
     }
 }
 
+template <size_t fraction_bits, size_t N>
+static constexpr fixed_width_int<N> fractional_multiply(fixed_width_int<N> a, fixed_width_int<N> b)
+{
+    return (fixed_width_int<N>)(wide_multiply(a, b) >> fraction_bits);
+}
+
+template <size_t fraction_bits, size_t N>
+static constexpr fixed_width_uint<N> fractional_multiply(fixed_width_uint<N> a, fixed_width_uint<N> b)
+{
+    return (fixed_width_uint<N>)(wide_multiply(a, b) >> fraction_bits);
+}
+
+template <size_t N>
+static constexpr fixed_width_uint<N * 2> make_repeated_byte_helper(fixed_width_uint<N> v)
+{
+    return ((fixed_width_uint<N * 2>)v << N) + (fixed_width_uint<N * 2>)v;
+}
+
+template <size_t N, typename = typename std::enable_if<N == 8>::type>
+static constexpr fixed_width_uint<8> make_repeated_byte(int v)
+{
+    return (fixed_width_uint<8>)(uintmax_t)v;
+}
+
+template <size_t N, typename = typename std::enable_if<(N > 8)>::type>
+static constexpr fixed_width_uint<N> make_repeated_byte(int v)
+{
+    return make_repeated_byte_helper(make_repeated_byte<N / 2>(v));
+}
+
+template <size_t N>
+fixed_width_uint<N> multiplicative_inverse(fixed_width_uint<N> d_in)
+{
+    typedef fixed_width_uint<N> uint;
+    typedef fixed_width_uint<N * 2> duint;
+    typedef fixed_width_int<N * 2> dsint;
+    constexpr size_t extra_precision = 16;
+    if(d_in <= (uint)1)
+        return ~(uint)0;
+    if(d_in >= (uint)1 << (N - 1))
+        return (uint)1;
+    intmax_t shift_amount = N - ilog2(d_in) - 1;
+    duint d = (duint)d_in << (shift_amount + extra_precision);
+    constexpr duint const_48_17 = ((duint)make_repeated_byte<N>(0xD2) + ((duint)2 << N)) << extra_precision;
+    constexpr duint const_32_17 = ((duint)make_repeated_byte<N>(0xE1) + ((duint)1 << N)) << extra_precision;
+    constexpr dsint const_1 = (dsint)1 << (N + extra_precision);
+    duint x = const_48_17 - fractional_multiply<N + extra_precision>(const_32_17, d);
+    constexpr intmax_t iteration_count = 1 + ilog2((fixed_width_uint<64>)((N + 1) / 4)); // should be ceil(log2((N + 1)/log2(17))) but this is almost always the same and always >= the correct value
+    for(intmax_t i = 0; i < iteration_count; i++)
+    {
+        x = (duint)((dsint)x + fractional_multiply<N + extra_precision>((dsint)x, const_1 - fractional_multiply<N + extra_precision>((dsint)d, (dsint)x)));
+    }
+    shift_amount = N - shift_amount;
+    x += (duint)1 << (shift_amount - 1 + extra_precision);
+    return (uint)(x >> (shift_amount + extra_precision));
+}
+
 template <size_t N>
 static fixed_width_uint<N> mydiv(fixed_width_uint<N> n_in, fixed_width_uint<N> d_in)
 {
-    // change to use newton's method: http://en.wikipedia.org/wiki/Division_algorithm#Pseudocode
     typedef fixed_width_uint<N> uint;
     typedef fixed_width_uint<N * 2> wuint;
     if(d_in == (uint)0)
@@ -157,18 +213,8 @@ static fixed_width_uint<N> mydiv(fixed_width_uint<N> n_in, fixed_width_uint<N> d
         return (uint)0;
     if((wuint)d_in << 1 > (wuint)n_in)
         return (uint)1;
-    intmax_t extra_fraction_bits = 2;
-    intmax_t fraction_bits = ilog2(d_in) + 1 + extra_fraction_bits;
-    wuint n = (wuint)n_in << extra_fraction_bits, d = (wuint)d_in << extra_fraction_bits;
-    wuint target = (wuint)1 << fraction_bits;
-    wuint two = (wuint)2 << fraction_bits;
-    while(target + (wuint)1 < d || target - (wuint)1 > d)
-    {
-        wuint factor = two - d;
-        n = n * factor >> fraction_bits;
-        d = d * factor >> fraction_bits;
-    }
-    wuint q = n >> fraction_bits;
+    uint inv = multiplicative_inverse(d_in);
+    wuint q = (wuint)fractional_multiply<N>(inv, n_in);
     q++;
     if((wuint)n_in < q * (wuint)d_in)
         q--;
@@ -180,8 +226,8 @@ static fixed_width_uint<N> mydiv(fixed_width_uint<N> n_in, fixed_width_uint<N> d
 void test_div()
 {
     typedef fixed_width_uint<32> uint;
-#define SINGLE_TEST_VALUE 0x641003
-    uintmax_t limit = 0x1000000;
+#define SINGLE_TEST_VALUE 0x5D60200
+    uintmax_t limit = 0x10000000;
 #ifndef SINGLE_TEST_VALUE
     for(uintmax_t n = 0; n < limit; n++)
     {
@@ -193,10 +239,41 @@ void test_div()
         if((n + 1) % 0x10000 == 0)
             cout << setw(15) << hex << n << dec << " " << (100 * n / limit) << "%\x1b[K\r" << flush;
         uint num = (uint)(n >> 12);
-        uint d = (uint)(n & 0xFFF);
+        uint d = (uint)(n & 0xFFFF);
         if(d == (uint)0)
             continue;
         uint result1 = num / d, result2 = mydiv(num, d);
+        if(result1 != result2)
+        {
+            cout << hex << n << dec << "\x1b[K\n " << result1 << "\n " << result2 << endl;
+        }
+#ifndef SINGLE_TEST_VALUE
+    }
+#else
+#undef SINGLE_TEST_VALUE
+    }
+    while(false);
+#endif
+}
+
+void test_mul()
+{
+    typedef fixed_width_uint<64> uint;
+//#define SINGLE_TEST_VALUE 0x641003
+    uintmax_t limit = 0x100000000;
+#ifndef SINGLE_TEST_VALUE
+    for(uintmax_t n = 0; n < limit; n++)
+    {
+#else
+    do
+    {
+        constexpr uintmax_t n = SINGLE_TEST_VALUE;
+#endif
+        if((n + 1) % 0x10000 == 0)
+            cout << setw(15) << hex << n << dec << " " << (100 * n / limit) << "%\x1b[K\r" << flush;
+        uint a = (uint)(n >> 16) << (64 - 16);
+        uint b = (uint)(n & 0xFFFF) << (64 - 16);
+        uint result1 = a * b, result2 = (uint)wide_multiply(a, b);
         if(result1 != result2)
         {
             cout << hex << n << dec << "\x1b[K\n " << result1 << "\n " << result2 << endl;
@@ -224,7 +301,6 @@ int main(int argc, char **argv)
     auto v = fp_type::log10_2();
     dumpf(v);
     dumpbi((fp_type::word_type)(v * pow10v));
-
     test_div();
 
     return 0;

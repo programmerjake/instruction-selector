@@ -17,6 +17,12 @@
 #define cpp14_constexpr
 #endif
 
+template <size_t bitCount, typename = void>
+struct fixed_width_uint_multiply_helper;
+
+template <size_t bitCount, typename = void>
+struct fixed_width_int_multiply_helper;
+
 template <size_t bitCount>
 struct fixed_width_uint final
 {
@@ -57,7 +63,11 @@ private:
     }
     static constexpr fixed_width_uint get_double_product(half_width_type a, half_width_type b)
     {
+#if 1 // use new method
+        return wide_multiply(a, b);
+#else
         return get_double_product_helper(a & quarter_mask, a >> quarter_width_type::bit_count, b & quarter_mask, b >> quarter_width_type::bit_count);
+#endif
     }
     static constexpr fixed_width_uint get_product(fixed_width_uint a, fixed_width_uint b)
     {
@@ -402,6 +412,10 @@ public:
     {
         return v.highPart == (half_width_type)0 ? ilog2(v.lowPart) : half_width_type::bit_count + ilog2(v.highPart);
     }
+    friend constexpr fixed_width_uint<bit_count * 2> wide_multiply(fixed_width_uint a, fixed_width_uint b)
+    {
+        return fixed_width_uint_multiply_helper<bit_count>::multiply(a, b);
+    }
 };
 
 template <size_t bitCount>
@@ -646,6 +660,16 @@ public:
     friend constexpr intmax_t ilog2(fixed_width_int v)
     {
         return v <= (fixed_width_int)0 ? -1 : ilog2((fixed_width_uint<bit_count>)v);
+    }
+    friend constexpr fixed_width_int<bit_count * 2> wide_multiply(fixed_width_int a, fixed_width_int b)
+    {
+        return a >= (fixed_width_int)0 ?
+            (b >= (fixed_width_int)0 ?
+                (fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)b) :
+                -(fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)-b)) :
+            (b >= (fixed_width_int)0 ?
+                -(fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)b) :
+                (fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)-b));
     }
 };
 
@@ -1051,6 +1075,11 @@ struct fixed_width_int<n> final : public builtin_fixed_width_int<std::int ## n #
         : builtin_fixed_width_int((std::intmax_t)v)\
     { \
     } \
+    template <typename T, typename = typename std::enable_if<std::is_same<fixed_width_int, T>::value>::type> \
+    friend constexpr fixed_width_int<T::bit_count * 2> wide_multiply(fixed_width_int a, T b) \
+    { \
+        return fixed_width_int_multiply_helper<T::bit_count>::multiply(a, b); \
+    } \
 };
 
 #define INSTANTIATE_FIXED_WIDTH_UINT(n) \
@@ -1078,18 +1107,109 @@ struct fixed_width_uint<n> final : public builtin_fixed_width_int<std::uint ## n
         : builtin_fixed_width_int((std::uintmax_t)(std::intmax_t)v)\
     { \
     } \
+    template <typename T, typename = typename std::enable_if<std::is_same<fixed_width_uint, T>::value>::type> \
+    friend constexpr fixed_width_uint<T::bit_count * 2> wide_multiply(fixed_width_uint a, T b) \
+    { \
+        return fixed_width_uint_multiply_helper<T::bit_count>::multiply(a, b); \
+    } \
 };
 
-INSTANTIATE_FIXED_WIDTH_INT(8)
-INSTANTIATE_FIXED_WIDTH_INT(16)
-INSTANTIATE_FIXED_WIDTH_INT(32)
-INSTANTIATE_FIXED_WIDTH_INT(64)
+// must instantiate from in ascending size order
+// must instantiate uint's first
 INSTANTIATE_FIXED_WIDTH_UINT(8)
+INSTANTIATE_FIXED_WIDTH_INT(8)
 INSTANTIATE_FIXED_WIDTH_UINT(16)
+INSTANTIATE_FIXED_WIDTH_INT(16)
 INSTANTIATE_FIXED_WIDTH_UINT(32)
+INSTANTIATE_FIXED_WIDTH_INT(32)
 INSTANTIATE_FIXED_WIDTH_UINT(64)
+INSTANTIATE_FIXED_WIDTH_INT(64)
 
 #undef INSTANTIATE_FIXED_WIDTH_INT
 #undef INSTANTIATE_FIXED_WIDTH_UINT
+
+template <size_t bitCount>
+struct fixed_width_uint_multiply_helper<bitCount, typename std::enable_if<(bitCount >= 64)>::type> // multiply using karatsuba's algorithm
+{
+    static constexpr size_t bit_count = bitCount;
+private:
+    static_assert(bit_count >= 16 && (bit_count & (bit_count - 1)) == 0, "invalid bit count");
+    typedef fixed_width_uint<bit_count * 2> duint;
+    typedef fixed_width_uint<bit_count> uint;
+    typedef fixed_width_uint<bit_count / 2> huint;
+    static constexpr std::pair<uint, uint> split_word_helper(uint v, uint high_part)
+    {
+        return std::pair<uint, uint>(high_part, v - (high_part << bit_count / 2));
+    }
+    static constexpr std::pair<uint, uint> split_word(uint v)
+    {
+        return split_word_helper(v, v >> bit_count / 2);
+    }
+    static constexpr uint multiply_part(uint a, uint b)
+    {
+        return wide_multiply((huint)a, (huint)b);
+    }
+    static constexpr duint multiply_helper(uint ah, uint al, uint bh, uint bl, uint zl, uint zh)
+    {
+        return ((duint)zh << bit_count) + (duint)zl + ((duint)(wide_multiply((huint)al + (huint)ah, (huint)bl + (huint)bh) - zl - zh) << (bit_count / 2));
+    }
+    static constexpr duint multiply_helper(uint ah, uint al, uint bh, uint bl)
+    {
+        return ah == (uint)0 && bh == (uint)0 ? (duint)multiply_part(al, bl) :
+            multiply_helper(ah, al, bh, bl, multiply_part(al, bl), multiply_part(ah, bh));
+    }
+    static constexpr duint multiply_helper(std::pair<uint, uint> a, std::pair<uint, uint> b)
+    {
+        return multiply_helper(std::get<0>(a), std::get<1>(a), std::get<0>(b), std::get<1>(b));
+    }
+public:
+    static constexpr duint multiply(uint a, uint b)
+    {
+        return multiply_helper(split_word(a), split_word(b));
+    }
+};
+
+template <size_t bitCount>
+struct fixed_width_uint_multiply_helper<bitCount, typename std::enable_if<(bitCount < 64)>::type> // multiply using built-in types
+{
+    static constexpr size_t bit_count = bitCount;
+private:
+    static_assert(bit_count >= 8 && (bit_count & (bit_count - 1)) == 0, "invalid bit count");
+    typedef fixed_width_uint<bit_count * 2> duint;
+    typedef fixed_width_uint<bit_count> uint;
+public:
+    static constexpr duint multiply(uint a, uint b)
+    {
+        return (duint)a * (duint)b;
+    }
+};
+
+template <size_t bitCount>
+struct fixed_width_int_multiply_helper<bitCount, typename std::enable_if<(bitCount >= 64)>::type> // multiply using karatsuba's algorithm
+{
+    static constexpr size_t bit_count = bitCount;
+    static_assert(bit_count >= 16 && (bit_count & (bit_count - 1)) == 0, "invalid bit count");
+    static constexpr fixed_width_int<bit_count * 2> multiply(fixed_width_int<bit_count> a, fixed_width_int<bit_count> b)
+    {
+        return a >= (fixed_width_int<bit_count>)0 ?
+            (b >= (fixed_width_int<bit_count>)0 ?
+                (fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)b) :
+                -(fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)-b)) :
+            (b >= (fixed_width_int<bit_count>)0 ?
+                -(fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)b) :
+                (fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)-b));
+    }
+};
+
+template <size_t bitCount>
+struct fixed_width_int_multiply_helper<bitCount, typename std::enable_if<(bitCount < 64)>::type> // multiply using built-in types
+{
+    static constexpr size_t bit_count = bitCount;
+    static_assert(bit_count >= 8 && (bit_count & (bit_count - 1)) == 0, "invalid bit count");
+    static constexpr fixed_width_int<bit_count * 2> multiply(fixed_width_int<bit_count> a, fixed_width_int<bit_count> b)
+    {
+        return (fixed_width_int<bit_count * 2>)a * (fixed_width_int<bit_count * 2>)b;
+    }
+};
 
 #endif // INT_TYPES_H_INCLUDED
