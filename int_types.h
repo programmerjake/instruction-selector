@@ -10,11 +10,12 @@
 #include <string>
 #include <sstream>
 #include <type_traits>
+#include <stdexcept>
 
 #if __cplusplus > 201103L
 #define cpp14_constexpr constexpr
 #else
-#define cpp14_constexpr
+#define cpp14_constexpr inline
 #endif
 
 template <size_t bitCount, typename = void>
@@ -57,17 +58,9 @@ private:
             current_bit_count >= 1 ? ((v >> current_bit_count) > (fixed_width_uint)0 ? current_bit_count + ilog_base_2(v >> current_bit_count, current_bit_count / 2) : ilog_base_2(v, current_bit_count / 2)) :
             0;
     }
-    static constexpr fixed_width_uint get_double_product_helper(half_width_type a_low, half_width_type a_high, half_width_type b_low, half_width_type b_high)
-    {
-        return a_high == (half_width_type)0 && b_high == (half_width_type)0 ? fixed_width_uint((half_width_type)0, a_low * b_low) : fixed_width_uint(a_high * b_high, a_low * b_low) + ((fixed_width_uint((half_width_type)0, a_low * b_high) + fixed_width_uint((half_width_type)0, a_high * b_low)) << quarter_width_type::bit_count);
-    }
     static constexpr fixed_width_uint get_double_product(half_width_type a, half_width_type b)
     {
-#if 1 // use new method
         return wide_multiply(a, b);
-#else
-        return get_double_product_helper(a & quarter_mask, a >> quarter_width_type::bit_count, b & quarter_mask, b >> quarter_width_type::bit_count);
-#endif
     }
     static constexpr fixed_width_uint get_product(fixed_width_uint a, fixed_width_uint b)
     {
@@ -82,10 +75,23 @@ private:
     {
         return fixed_width_uint(get_difference_borrow(a.lowPart, b.lowPart) ? a.highPart - b.highPart - (half_width_type)1 : a.highPart - b.highPart, a.lowPart - b.lowPart);
     }
-    static constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod_helper(fixed_width_uint dividend, fixed_width_uint divisor, int bit_index, fixed_width_uint quotient)
+#if 1 // use new division algorithm
+    static cpp14_constexpr fixed_width_uint divide(fixed_width_uint dividend, fixed_width_uint divisor)
     {
-        // use new sqrt algorithm once we speed up division
-#if __cplusplus > 201103L
+        return div_imp(dividend, divisor);
+    }
+    static cpp14_constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod(fixed_width_uint dividend, fixed_width_uint divisor)
+    {
+        fixed_width_uint quotient = divide(dividend, divisor);
+        return std::pair<fixed_width_uint, fixed_width_uint>(quotient, dividend - quotient * divisor);
+    }
+    static cpp14_constexpr fixed_width_uint modulus(fixed_width_uint dividend, fixed_width_uint divisor)
+    {
+        return std::get<1>(divmod(dividend, divisor));
+    }
+#else
+    static cpp14_constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod_helper(fixed_width_uint dividend, fixed_width_uint divisor, int bit_index, fixed_width_uint quotient)
+    {
         for(; bit_index >= 0; bit_index--)
         {
             if(dividend >= (divisor << bit_index))
@@ -95,19 +101,23 @@ private:
             }
         }
         return std::pair<fixed_width_uint, fixed_width_uint>(quotient, dividend);
-#else
-        return bit_index < 0 ? std::pair<fixed_width_uint, fixed_width_uint>(quotient, dividend) :
-            dividend >= (divisor << bit_index) ? divmod_helper(dividend - (divisor << bit_index), divisor, bit_index - 1, quotient | (fixed_width_uint(1) << bit_index)) :
-            divmod_helper(dividend, divisor, bit_index - 1, quotient);
-#endif
     }
-    static constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod(fixed_width_uint dividend, fixed_width_uint divisor)
+    static cpp14_constexpr std::pair<fixed_width_uint, fixed_width_uint> divmod(fixed_width_uint dividend, fixed_width_uint divisor)
     {
         return dividend.highPart == (half_width_type)0 && divisor.highPart == (half_width_type)0 ? std::pair<fixed_width_uint, fixed_width_uint>(fixed_width_uint(half_width_type(0), dividend.lowPart / divisor.lowPart), fixed_width_uint(half_width_type(0), dividend.lowPart % divisor.lowPart)) :
             dividend == divisor ? std::pair<fixed_width_uint, fixed_width_uint>(fixed_width_uint(1), fixed_width_uint(0)) :
             dividend < divisor ? std::pair<fixed_width_uint, fixed_width_uint>(fixed_width_uint(0), divisor) :
             divmod_helper(dividend, divisor, ilog_base_2(dividend) - ilog_base_2(divisor), fixed_width_uint(0));
     }
+    static cpp14_constexpr fixed_width_uint divide(fixed_width_uint dividend, fixed_width_uint divisor)
+    {
+        return std::get<0>(divmod(dividend, divisor));
+    }
+    static cpp14_constexpr fixed_width_uint modulus(fixed_width_uint dividend, fixed_width_uint divisor)
+    {
+        return std::get<1>(divmod(dividend, divisor));
+    }
+#endif
     template <size_t N, typename = typename std::enable_if<(N > bit_count) && (N & (N - 1)) == 0>::type>
     static constexpr fixed_width_uint convert_size(fixed_width_uint<N> v)
     {
@@ -278,13 +288,13 @@ public:
     {
         return b < a;
     }
-    friend constexpr fixed_width_uint operator /(fixed_width_uint a, fixed_width_uint b)
+    friend cpp14_constexpr fixed_width_uint operator /(fixed_width_uint a, fixed_width_uint b)
     {
-        return std::get<0>(divmod(a, b));
+        return divide(a, b);
     }
-    friend constexpr fixed_width_uint operator %(fixed_width_uint a, fixed_width_uint b)
+    friend cpp14_constexpr fixed_width_uint operator %(fixed_width_uint a, fixed_width_uint b)
     {
-        return std::get<1>(divmod(a, b));
+        return modulus(a, b);
     }
     cpp14_constexpr const fixed_width_uint &operator /=(fixed_width_uint r)
     {
@@ -416,6 +426,9 @@ public:
     {
         return fixed_width_uint_multiply_helper<bit_count>::multiply(a, b);
     }
+    static cpp14_constexpr fixed_width_uint multiplicative_inverse(fixed_width_uint d_in);
+private:
+    static cpp14_constexpr fixed_width_uint div_imp(fixed_width_uint n_in, fixed_width_uint d_in);
 };
 
 template <size_t bitCount>
@@ -665,11 +678,11 @@ public:
     {
         return a >= (fixed_width_int)0 ?
             (b >= (fixed_width_int)0 ?
-                (fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)b) :
-                -(fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)-b)) :
+                (fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)b) :
+                -(fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)a, (fixed_width_uint<bit_count>)-b)) :
             (b >= (fixed_width_int)0 ?
-                -(fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)b) :
-                (fixed_width_int)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)-b));
+                -(fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)b) :
+                (fixed_width_int<bit_count * 2>)wide_multiply((fixed_width_uint<bit_count>)-a, (fixed_width_uint<bit_count>)-b));
     }
 };
 
@@ -1128,6 +1141,7 @@ INSTANTIATE_FIXED_WIDTH_INT(64)
 #undef INSTANTIATE_FIXED_WIDTH_INT
 #undef INSTANTIATE_FIXED_WIDTH_UINT
 
+#if 0
 template <size_t bitCount>
 struct fixed_width_uint_multiply_helper<bitCount, typename std::enable_if<(bitCount >= 64)>::type> // multiply using karatsuba's algorithm
 {
@@ -1147,11 +1161,17 @@ private:
     }
     static constexpr uint multiply_part(uint a, uint b)
     {
-        return wide_multiply((huint)a, (huint)b);
+        return a >= (uint)1 << huint::bit_count ?
+            (b >= (uint)1 << huint::bit_count ?
+                wide_multiply((huint)a, (huint)b) + ((a + b) << huint::bit_count) :
+                wide_multiply((huint)a, (huint)b) + (b << huint::bit_count)) :
+            (b >= (uint)1 << huint::bit_count ?
+                wide_multiply((huint)a, (huint)b) + (a << huint::bit_count) :
+                wide_multiply((huint)a, (huint)b));
     }
     static constexpr duint multiply_helper(uint ah, uint al, uint bh, uint bl, uint zl, uint zh)
     {
-        return ((duint)zh << bit_count) + (duint)zl + ((duint)(wide_multiply((huint)al + (huint)ah, (huint)bl + (huint)bh) - zl - zh) << (bit_count / 2));
+        return ((duint)zh << bit_count) + (duint)zl + ((duint)(multiply_part(al + ah, bl + bh) - zl - zh) << huint::bit_count);
     }
     static constexpr duint multiply_helper(uint ah, uint al, uint bh, uint bl)
     {
@@ -1168,6 +1188,46 @@ public:
         return multiply_helper(split_word(a), split_word(b));
     }
 };
+#else
+template <size_t bitCount>
+struct fixed_width_uint_multiply_helper<bitCount, typename std::enable_if<(bitCount >= 64)>::type>
+{
+    static constexpr size_t bit_count = bitCount;
+private:
+    static_assert(bit_count >= 16 && (bit_count & (bit_count - 1)) == 0, "invalid bit count");
+    typedef fixed_width_uint<bit_count * 2> duint;
+    typedef fixed_width_uint<bit_count> uint;
+    typedef fixed_width_uint<bit_count / 2> huint;
+    static constexpr std::pair<uint, uint> split_word_helper(uint v, uint high_part)
+    {
+        return std::pair<uint, uint>(high_part, v - (high_part << bit_count / 2));
+    }
+    static constexpr std::pair<uint, uint> split_word(uint v)
+    {
+        return split_word_helper(v, v >> bit_count / 2);
+    }
+    static constexpr uint multiply_part(uint a, uint b)
+    {
+        return wide_multiply((huint)a, (huint)b);
+    }
+    static constexpr duint multiply_helper(uint ah, uint al, uint bh, uint bl)
+    {
+        return ah == (uint)0 && bh == (uint)0 ? (duint)multiply_part(al, bl) :
+            ((duint)multiply_part(ah, bh) << uint::bit_count) +
+                (((duint)multiply_part(ah, bl) + (duint)multiply_part(al, bh)) << huint::bit_count) +
+                (duint)multiply_part(al, bl);
+    }
+    static constexpr duint multiply_helper(std::pair<uint, uint> a, std::pair<uint, uint> b)
+    {
+        return multiply_helper(std::get<0>(a), std::get<1>(a), std::get<0>(b), std::get<1>(b));
+    }
+public:
+    static constexpr duint multiply(uint a, uint b)
+    {
+        return multiply_helper(split_word(a), split_word(b));
+    }
+};
+#endif
 
 template <size_t bitCount>
 struct fixed_width_uint_multiply_helper<bitCount, typename std::enable_if<(bitCount < 64)>::type> // multiply using built-in types
@@ -1211,5 +1271,90 @@ struct fixed_width_int_multiply_helper<bitCount, typename std::enable_if<(bitCou
         return (fixed_width_int<bit_count * 2>)a * (fixed_width_int<bit_count * 2>)b;
     }
 };
+
+template <size_t N, typename = typename std::enable_if<N == 8>::type>
+static constexpr fixed_width_uint<8> make_repeated_byte(int v)
+{
+    return (fixed_width_uint<8>)(uintmax_t)v;
+}
+
+template <size_t N, typename = typename std::enable_if<(N > 8)>::type>
+static constexpr fixed_width_uint<N> make_repeated_byte(int v)
+{
+    return make_repeated_byte_helper(make_repeated_byte<N / 2>(v));
+}
+
+template <size_t fraction_bits, size_t N>
+static constexpr fixed_width_int<N> fractional_multiply(fixed_width_int<N> a, fixed_width_int<N> b)
+{
+    return (fixed_width_int<N>)(wide_multiply(a, b) >> fraction_bits);
+}
+
+template <size_t fraction_bits, size_t N>
+static constexpr fixed_width_uint<N> fractional_multiply(fixed_width_uint<N> a, fixed_width_uint<N> b)
+{
+    return (fixed_width_uint<N>)(wide_multiply(a, b) >> fraction_bits);
+}
+
+template <size_t N>
+static constexpr fixed_width_uint<N * 2> make_repeated_byte_helper(fixed_width_uint<N> v)
+{
+    return ((fixed_width_uint<N * 2>)v << N) + (fixed_width_uint<N * 2>)v;
+}
+
+template <size_t N>
+cpp14_constexpr fixed_width_uint<N> fixed_width_uint<N>::multiplicative_inverse(fixed_width_uint<N> d_in)
+{
+    typedef fixed_width_uint<N> uint;
+    typedef fixed_width_uint<N * 2> duint;
+    typedef fixed_width_int<N * 2> dsint;
+    constexpr size_t extra_precision = 4;
+    if(d_in <= (uint)1)
+        return ~(uint)0;
+    if(d_in >= (uint)1 << (N - 1))
+        return (uint)1;
+    intmax_t shift_amount = N - ilog2(d_in) - 1;
+    duint d = (duint)d_in << (shift_amount + extra_precision);
+    constexpr duint const_48_17 = ((duint)make_repeated_byte<N>(0xD2) + ((duint)2 << N)) << extra_precision;
+    constexpr duint const_32_17 = ((duint)make_repeated_byte<N>(0xE1) + ((duint)1 << N)) << extra_precision;
+    constexpr dsint const_1 = (dsint)1 << (N + extra_precision);
+    duint x = const_48_17 - fractional_multiply<N + extra_precision>(const_32_17, d);
+    constexpr intmax_t iteration_count = 1 + ilog2((fixed_width_uint<64>)((N + 1) / 4)); // should be ceil(log2((N + 1)/log2(17))) but this is almost always the same and always >= the correct value
+    for(intmax_t i = 0; i < iteration_count; i++)
+    {
+        auto d_x = fractional_multiply<N + extra_precision>((dsint)d, (dsint)x);
+        auto e = const_1 - d_x;
+        auto delta = fractional_multiply<N + extra_precision>((dsint)x, e);
+        x = (duint)((dsint)x + delta);
+    }
+    shift_amount = N - shift_amount;
+    x += (duint)1 << (shift_amount - 1 + extra_precision);
+    return (uint)(x >> (shift_amount + extra_precision));
+}
+
+template <size_t N>
+cpp14_constexpr fixed_width_uint<N> fixed_width_uint<N>::div_imp(fixed_width_uint<N> n_in, fixed_width_uint<N> d_in)
+{
+    typedef fixed_width_uint<N> uint;
+    typedef fixed_width_uint<N * 2> wuint;
+    if(d_in == (uint)0)
+        throw std::domain_error("division by zero");
+    if(d_in == (uint)1)
+        return n_in;
+    if(d_in == (uint)2)
+        return n_in >> 1;
+    if(d_in > n_in)
+        return (uint)0;
+    if((wuint)d_in << 1 > (wuint)n_in)
+        return (uint)1;
+    uint inv = multiplicative_inverse(d_in);
+    wuint q = (wuint)fractional_multiply<N>(inv, n_in);
+    q++;
+    if((wuint)n_in < q * (wuint)d_in)
+        q--;
+    if((wuint)n_in < q * (wuint)d_in)
+        q--;
+    return (uint)q;
+}
 
 #endif // INT_TYPES_H_INCLUDED

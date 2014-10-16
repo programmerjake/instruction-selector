@@ -141,36 +141,6 @@ void test_sqrt()
     }
 }
 
-template <size_t fraction_bits, size_t N>
-static constexpr fixed_width_int<N> fractional_multiply(fixed_width_int<N> a, fixed_width_int<N> b)
-{
-    return (fixed_width_int<N>)(wide_multiply(a, b) >> fraction_bits);
-}
-
-template <size_t fraction_bits, size_t N>
-static constexpr fixed_width_uint<N> fractional_multiply(fixed_width_uint<N> a, fixed_width_uint<N> b)
-{
-    return (fixed_width_uint<N>)(wide_multiply(a, b) >> fraction_bits);
-}
-
-template <size_t N>
-static constexpr fixed_width_uint<N * 2> make_repeated_byte_helper(fixed_width_uint<N> v)
-{
-    return ((fixed_width_uint<N * 2>)v << N) + (fixed_width_uint<N * 2>)v;
-}
-
-template <size_t N, typename = typename std::enable_if<N == 8>::type>
-static constexpr fixed_width_uint<8> make_repeated_byte(int v)
-{
-    return (fixed_width_uint<8>)(uintmax_t)v;
-}
-
-template <size_t N, typename = typename std::enable_if<(N > 8)>::type>
-static constexpr fixed_width_uint<N> make_repeated_byte(int v)
-{
-    return make_repeated_byte_helper(make_repeated_byte<N / 2>(v));
-}
-
 template <size_t N>
 fixed_width_uint<N> multiplicative_inverse(fixed_width_uint<N> d_in)
 {
@@ -191,7 +161,10 @@ fixed_width_uint<N> multiplicative_inverse(fixed_width_uint<N> d_in)
     constexpr intmax_t iteration_count = 1 + ilog2((fixed_width_uint<64>)((N + 1) / 4)); // should be ceil(log2((N + 1)/log2(17))) but this is almost always the same and always >= the correct value
     for(intmax_t i = 0; i < iteration_count; i++)
     {
-        x = (duint)((dsint)x + fractional_multiply<N + extra_precision>((dsint)x, const_1 - fractional_multiply<N + extra_precision>((dsint)d, (dsint)x)));
+        auto d_x = fractional_multiply<N + extra_precision>((dsint)d, (dsint)x);
+        auto e = const_1 - d_x;
+        auto delta = fractional_multiply<N + extra_precision>((dsint)x, e);
+        x = (duint)((dsint)x + delta);
     }
     shift_amount = N - shift_amount;
     x += (duint)1 << (shift_amount - 1 + extra_precision);
@@ -226,7 +199,7 @@ static fixed_width_uint<N> mydiv(fixed_width_uint<N> n_in, fixed_width_uint<N> d
 void test_div()
 {
     typedef fixed_width_uint<32> uint;
-#define SINGLE_TEST_VALUE 0x5D60200
+//#define SINGLE_TEST_VALUE 0x5D60200
     uintmax_t limit = 0x10000000;
 #ifndef SINGLE_TEST_VALUE
     for(uintmax_t n = 0; n < limit; n++)
@@ -289,7 +262,7 @@ void test_mul()
 
 int main(int argc, char **argv)
 {
-    typedef ieee754_soft_float_64 fp_type;
+    typedef ieee754_soft_float_512 fp_type;
 
     auto pow10v = (fp_type)(uintmax_t)1;
 
@@ -301,7 +274,7 @@ int main(int argc, char **argv)
     auto v = fp_type::log10_2();
     dumpf(v);
     dumpbi((fp_type::word_type)(v * pow10v));
-    test_div();
+    //test_div();
 
     return 0;
 }

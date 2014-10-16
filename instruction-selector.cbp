@@ -30,7 +30,7 @@
 		</Build>
 		<Compiler>
 			<Add option="-Wall" />
-			<Add option="-std=c++1y -fconstexpr-steps=10000000" />
+			<Add option="-std=c++11 -fconstexpr-steps=10000000" />
 		</Compiler>
 		<Unit filename="float_types.h" />
 		<Unit filename="instruction_list.h" />

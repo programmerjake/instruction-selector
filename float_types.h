@@ -8,7 +8,7 @@
 #if __cplusplus > 201103L
 #define cpp14_constexpr constexpr
 #else
-#define cpp14_constexpr
+#define cpp14_constexpr inline
 #endif
 
 template <size_t N, typename = void>
@@ -443,7 +443,7 @@ private:
     {
         return (v & (word_type)1) + (v >> 1);
     }
-    static constexpr word_type fractional_quotient(word_type a, word_type b)
+    static cpp14_constexpr word_type fractional_quotient(word_type a, word_type b)
     {
         return round_word((word_type)(((double_word_type)a << (radix_point_shift + 1)) / (double_word_type)b));
     }
@@ -455,7 +455,7 @@ private:
             b_abs.isinf() ? (a_abs.iszero() ? nan_word : inf_word) :
             construct_float(false, fractional_product(a_abs.get_unsigned_mantissa_value(), b_abs.get_unsigned_mantissa_value()), a_abs.get_unbiased_exponent_value() + b_abs.get_unbiased_exponent_value());
     }
-    static constexpr word_type quotient_helper(ieee754_soft_float a_abs, ieee754_soft_float b_abs)
+    static cpp14_constexpr word_type quotient_helper(ieee754_soft_float a_abs, ieee754_soft_float b_abs)
     {
         return a_abs.isnan() ? a_abs.word :
             b_abs.isnan() ? b_abs.word :
@@ -469,7 +469,7 @@ public:
     {
         return from_bits(product_helper(abs(a), abs(b)) | ((a.word ^ b.word) & sign_bit_mask));
     }
-    friend constexpr ieee754_soft_float operator /(ieee754_soft_float a, ieee754_soft_float b)
+    friend cpp14_constexpr ieee754_soft_float operator /(ieee754_soft_float a, ieee754_soft_float b)
     {
         return from_bits(quotient_helper(abs(a), abs(b)) | ((a.word ^ b.word) & sign_bit_mask));
     }
@@ -609,12 +609,12 @@ public:
         return v.signbit() ? ceil(v) : floor(v);
     }
 private:
-    static constexpr word_type fractional_sqrt(word_type v)
+    static cpp14_constexpr word_type fractional_sqrt(word_type v)
     {
         return round_word((word_type)floor_sqrt((double_word_type)v << (radix_point_shift + 2)));
     }
 public:
-    friend constexpr ieee754_soft_float sqrt(ieee754_soft_float v)
+    friend cpp14_constexpr ieee754_soft_float sqrt(ieee754_soft_float v)
     {
         return v.isnan() || v.iszero() ? v :
             v.signbit() ? from_bits(nan_word) :
@@ -639,14 +639,24 @@ private:
     {
         return v * v;
     }
-    static ieee754_soft_float calc_pi_helper(double_precision_type a, double_precision_type b, double_precision_type t, double_precision_type p)
-    {
-        return a == b ? (ieee754_soft_float)(a * a / t) :
-            calc_pi_helper((a + b) / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2, sqrt(a * b), t - p * square(a - (a + b) / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2), p * (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2);
-    }
     static ieee754_soft_float calc_pi()
     {
-        return calc_pi_helper((double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1, double_precision_type::sqrt_1_2(), (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1 / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)4, (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1);
+        double_precision_type a = (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1;
+        double_precision_type b = double_precision_type::sqrt_1_2();
+        double_precision_type t = (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1 / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)4;
+        double_precision_type p = (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)1;
+        while((ieee754_soft_float)a != (ieee754_soft_float)b)
+        {
+            double_precision_type new_a = (a + b) / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2;
+            double_precision_type new_b = sqrt(a * b);
+            double_precision_type new_t = t - p * square(a - (a + b) / (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2);
+            double_precision_type new_p = p * (double_precision_type)(fixed_width_uint<padded_bit_count * 2>)2;
+            a = new_a;
+            b = new_b;
+            t = new_t;
+            p = new_p;
+        }
+        return (ieee754_soft_float)(a * a / t);
     }
 public:
     static ieee754_soft_float pi()
